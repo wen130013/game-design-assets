@@ -78,11 +78,53 @@ local refs = {}
 -- ============================================================
 local function SmallButton(label, onClick, opts)
     opts = opts or {}
+    -- ⚔️ emoji 在部分设备回退成白色叉：自动替换为双剑交叉图标
+    local icon = opts.icon
+    if label:find("⚔") then
+        icon = icon or "image/icon_war_双剑交叉.png"
+        label = label:gsub("⚔️", ""):gsub("⚔", "")
+        label = label:gsub("^%s+", ""):gsub("%s+$", "")
+    end
     local bg = opts.bg or COLORS.btnDefault
     local hoverBg = opts.hoverBg or COLORS.btnHover
-    local textColor = opts.textColor or COLORS.textPrimary
+    -- 羊皮纸质感：默认墨字（纸底上白字不可读）
+    local textColor = opts.textColor or { 56, 36, 18, 255 }
     local w = opts.width or nil
     local fontSize = opts.fontSize or 13
+    if icon then
+        return UI.Button {
+            fontSize = fontSize,
+            backgroundColor = bg,
+            hoverBackgroundColor = hoverBg,
+            pressedBackgroundColor = hoverBg,
+            backgroundImage = "image/panel_parchment_20260901161208.png",
+            backgroundFit = "fill",
+            hoverBackgroundImageOpacity = 0.82,
+            pressedBackgroundImageOpacity = 0.72,
+            borderRadius = 6,
+            borderWidth = opts.borderWidth,
+            borderColor = opts.borderColor,
+            height = opts.height or 36,
+            width = w,
+            flexGrow = opts.flexGrow,
+            onClick = onClick,
+            children = {
+                UI.Panel {
+                    flexDirection = "row", alignItems = "center", justifyContent = "center",
+                    width = "100%", height = "100%", gap = 5,
+                    children = {
+                        UI.Panel {
+                            width = opts.iconSize or 18, height = opts.iconSize or 18,
+                            backgroundImage = icon, backgroundFit = "contain",
+                        },
+                        UI.Label { text = label, fontSize = fontSize, fontColor = textColor,
+                                   fontWeight = "bold",
+                                   width = ((utf8 and utf8.len(label)) or #label) * (fontSize + 2) + 12 },
+                    },
+                },
+            },
+        }
+    end
     return UI.Button {
         text = label,
         fontSize = fontSize,
@@ -90,6 +132,10 @@ local function SmallButton(label, onClick, opts)
         backgroundColor = bg,
         hoverBackgroundColor = hoverBg,
         pressedBackgroundColor = hoverBg,
+        backgroundImage = "image/panel_parchment_20260901161208.png",
+        backgroundFit = "fill",
+        hoverBackgroundImageOpacity = 0.82,
+        pressedBackgroundImageOpacity = 0.72,
         borderRadius = 6,
         borderWidth = opts.borderWidth,
         borderColor = opts.borderColor,
@@ -212,9 +258,9 @@ local function createTopBar(gameState, callbacks)
     local techBtn = SmallButton("科技", function()
         if callbacks.onTechToggle then callbacks.onTechToggle() end
     end, { width = 42, height = 30, fontSize = 11, bg = { 40, 50, 70, 220 } })
-    local gearBtn = SmallButton("⚙", function()
+    local gearBtn = SmallButton("设置", function()
         GameUI.toggleSettings()
-    end, { width = 34, height = 30, fontSize = 15, bg = { 40, 50, 70, 220 } })
+    end, { width = 62, height = 30, fontSize = 12 })
 
     local topBar = UI.Panel {
         position = "absolute",
@@ -1418,7 +1464,13 @@ local function createPeaceDialog(callbacks)
         end,
         children = { refs.peaceVassalIcon, vassalTitle, UI.Panel { flexGrow = 1 }, vassalCost },
     }
-    local annexTitle = UI.Label { text = "⚔ 吞并全境", fontSize = 13, fontColor = COLORS.textPrimary, fontWeight = "bold" }
+    local annexTitle = UI.Panel {
+        flexDirection = "row", alignItems = "center", gap = 5,
+        children = {
+            UI.Panel { width = 14, height = 14, backgroundImage = "image/icon_war_双剑交叉.png", backgroundFit = "contain" },
+            UI.Label { text = "吞并全境", fontSize = 13, fontColor = COLORS.textPrimary, fontWeight = "bold" },
+        },
+    }
     local annexCost = UI.Label { text = "全部", fontSize = 11, fontColor = COLORS.gold, fontWeight = "bold" }
     refs.peaceAnnexCard = UI.Button {
         height = 60,
@@ -1675,7 +1727,7 @@ local function createPeaceDialog(callbacks)
                                         gap = 5,
                                         children = { refs.peaceColorBlockA, refs.peaceSideAName },
                                     },
-                                    UI.Label { text = "⚔", fontSize = 13, fontColor = COLORS.textPrimary },
+                                    UI.Panel { width = 14, height = 14, backgroundImage = "image/icon_war_双剑交叉.png", backgroundFit = "contain" },
                                     UI.Panel {
                                         flexDirection = "row",
                                         alignItems = "center",
@@ -2825,6 +2877,11 @@ function GameUI.toggleSettings()
     end
 end
 
+--- 设置面板是否可见
+function GameUI.isSettingsVisible()
+    return refs.settingsOverlay ~= nil and refs.settingsOverlay:IsVisible()
+end
+
 --- 刷新设置面板（进入时同步音乐开关/音量/当前曲目状态）
 function GameUI.refreshSettings()
     if not refs.settingsOverlay then return end
@@ -3015,6 +3072,9 @@ local function createSettingsPanel(callbacks)
                     UI.Divider { color = { 110, 82, 50, 160 }, thickness = 1 },
                     paperActionBtn("保存游戏", { 64, 42, 20, 255 }, function()
                         if callbacks.onSave then callbacks.onSave() end
+                    end),
+                    paperActionBtn("读取存档", { 64, 42, 20, 255 }, function()
+                        if callbacks.onLoadGame then callbacks.onLoadGame() end
                     end),
                     -- ===== 音乐区 =====
                     UI.Label {

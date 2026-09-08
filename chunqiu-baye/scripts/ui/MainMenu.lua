@@ -94,13 +94,13 @@ local function GuFengButton(label, onClick, opts)
         fontWeight = "bold",
         textColor = { 56, 36, 18, 255 },                     -- 浓墨字（Button 用 textColor）
         textShadow = { offsetX = 0, offsetY = 1, blur = 1, color = { 255, 250, 235, 70 } },
-        backgroundColor = { 70, 46, 22, 255 },               -- 深棕底：按下时透出 = 变暗
-        hoverBackgroundColor = { 70, 46, 22, 255 },
-        pressedBackgroundColor = { 46, 28, 12, 255 },        -- 按下底色更深
+        backgroundColor = { 0, 0, 0, 0 },                    -- 已去掉棕色底框（纸图透明区不再透出棕色）
+        hoverBackgroundColor = { 0, 0, 0, 0 },
+        pressedBackgroundColor = { 0, 0, 0, 0 },             -- 按下反馈改由纸图变暗承担
         backgroundImage = "image/btn_scroll_normal.png",     -- 羊皮纸卷轴条（仅一张图）
         backgroundFit = "fill",
         hoverBackgroundImageOpacity = 1,                     -- 悬停不变
-        pressedBackgroundImageOpacity = 0.22,                -- 按下：纸图变暗为深咖啡，无手印无延迟
+        pressedBackgroundImageOpacity = 0.55,                -- 按下：纸图变暗（按下反馈），无棕框无手印
         onClick = onClick,
     }
     if opts.intro then
@@ -565,27 +565,28 @@ function MainMenu.create(options)
     -- 标题行整体参与入场动画（第一个浮现）
     introAdd(children[1], 0)
 
-    -- 继续游戏（有存档时显示）
-    if options.onContinue then
-        children[#children + 1] = GuFengButton("继续游戏", function()
-            if options.onContinue then options.onContinue() end
-        end, { intro = true })
-    end
-
     -- 新的游戏
     children[#children + 1] = GuFengButton("新的游戏", function()
         if options.onStart then options.onStart() end
     end, { intro = true, id = "btnNewGame" })
 
-    -- 读取存档（独立入口，有存档才显示，无存档点击提示）
-    children[#children + 1] = GuFengButton("读取存档", function()
-        if options.onLoadSave then options.onLoadSave() end
-    end, { intro = true })
+    -- 读取存档（有存档时显示）
+    if options.onLoadSave or options.onContinue then
+        children[#children + 1] = GuFengButton("读取存档", function()
+            if options.onLoadSave then
+                options.onLoadSave()
+            elseif options.onContinue then
+                options.onContinue()
+            end
+        end, { intro = true })
+    end
 
+    -- 地图编辑器
     children[#children + 1] = GuFengButton("地图编辑器", function()
-        refs.mapEditorOverlay:Show()
+        if options.onEditor then options.onEditor() end
     end, { intro = true })
 
+    -- 模组
     children[#children + 1] = GuFengButton("模组", function()
         -- 打开前刷新当前地图包显示
         local MapPack = require("data.MapPack")
@@ -639,6 +640,9 @@ function MainMenu.create(options)
             mapEditorOverlay,
         },
     }
+    -- [P0 临时] root 就绪后注入给工坊验证模块（按钮 onClick 不直接引用 root）
+    require("mod.WorkshopProbe").attachRoot(root)
+
     return root
 end
 

@@ -26,6 +26,8 @@ local SaveManager     = require("save.SaveManager")
 
 -- UI modules
 local MainMenu = require("ui.MainMenu")
+local CountrySelect = require("ui.CountrySelect")
+local ScenarioEditor = require("ui.ScenarioEditor")
 local GameUI   = require("ui.GameUI")
 local MapRenderer = require("map.MapRenderer")
 
@@ -110,6 +112,10 @@ function ShowMainMenu()
             print("[Main] 选择势力")
             ShowFactionSelect()
         end,
+        onEditor = function()
+            print("[Main] 打开剧本编辑器")
+            ShowScenarioEditor()
+        end,
         -- 继续游戏（有存档时显示）
         onContinue = SaveManager.hasSave() and function()
             print("[Main] 继续游戏")
@@ -158,93 +164,50 @@ end
 function ShowFactionSelect()
     currentPhase_ = "select"
 
-    -- 列出有领地的势力（按领土大小排序）
-    ---@type table[]
-    local list = {}
-    ---@type table[]
-    local allFactions = Factions.data
-    for _, f in ipairs(allFactions) do
-        if f.provinces and #f.provinces > 0 then
-            list[#list + 1] = f
-        end
-    end
-    table.sort(list, function(a, b) return #a.provinces > #b.provinces end)
+    -- 新版选国界面：列表 + 地图 + 信息卡（古风卷轴风）
+    CountrySelect.show({
+        onStart = function(factionId)
+            StartGame(factionId)
+        end,
+        onBack = function()
+            ShowMainMenu()
+        end,
+    })
+end
 
-    local rows = UI.Panel { width = "100%", gap = 6 }
-    for i = 1, #list do
-        local f = list[i]
-        rows:AddChild(UI.Button {
-            height = 46,
-            backgroundColor = { 35, 45, 65, 220 },
-            borderRadius = 6,
-            onClick = function()
-                print("[Main] 选择势力: " .. (f.name or f.id))
-                StartGame(f.id)
-            end,
-            children = {
-                UI.Panel {
-                    flexDirection = "row",
-                    alignItems = "center",
-                    gap = 8,
-                    width = "100%",
-                    children = {
-                        UI.Panel {
-                            width = 14, height = 14,
-                            borderRadius = 7,
-                            backgroundColor = f.color or { 150, 150, 150, 255 },
-                        },
-                        UI.Label {
-                            text = f.name or ("势力#" .. f.id),
-                            fontSize = 14,
-                            fontColor = { 255, 255, 255, 255 },
-                            fontWeight = "bold",
-                        },
-                        UI.Label {
-                            text = "🗺" .. #f.provinces .. "  ⚔️" .. (f.armySize or 0),
-                            fontSize = 11,
-                            fontColor = { 180, 190, 210, 200 },
-                            flexGrow = 1,
-                        },
-                    },
-                },
-            },
-        })
-    end
+-- ============================================================================
+-- Phase: Scenario Editor（剧本编辑器）
+-- ============================================================================
 
-    uiRoot_ = UI.Panel {
-        width = "100%",
-        height = "100%",
-        backgroundColor = { 15, 20, 30, 255 },
-        padding = 20,
-        children = {
-            UI.Panel {
-                width = "100%",
-                alignItems = "center",
-                marginBottom = 12,
-                children = {
-                    UI.Label {
-                        text = "选择你的国家",
-                        fontSize = 24,
-                        fontColor = { 255, 210, 80, 255 },
-                        fontWeight = "bold",
-                    },
-                    UI.Label {
-                        text = "你将在乱世中崛起，逐鹿九州",
-                        fontSize = 12,
-                        fontColor = { 160, 165, 175, 255 },
-                        marginTop = 4,
-                    },
-                },
-            },
-            UI.ScrollView {
-                width = "100%",
-                flexGrow = 1,
-                flexBasis = 0,
-                children = { rows },
-            },
-        },
-    }
-    UI.SetRoot(uiRoot_)
+--- 用编辑器剧本开局：写入 save.json 后复用整个读档管线
+function StartScenario(scenarioData)
+    local ok, json = pcall(cjson.encode, scenarioData)
+    if not ok then
+        print("[Main] 剧本序列化失败")
+        return
+    end
+    local file = File("save.json", FILE_WRITE)
+    if not file or not file:IsOpen() then
+        print("[Main] 剧本开局失败：无法写存档文件")
+        return
+    end
+    file:WriteString(json)
+    file:Close()
+    print("[Main] 剧本已写入，开始游戏")
+    ContinueGame()
+end
+
+--- 打开剧本编辑器
+function ShowScenarioEditor()
+    currentPhase_ = "editor"
+    ScenarioEditor.show({
+        onStart = function(data)
+            StartScenario(data)
+        end,
+        onBack = function()
+            ShowMainMenu()
+        end,
+    })
 end
 
 -- ============================================================================
@@ -762,6 +725,15 @@ function BuildGameUI()
             end
         end,
 
+        onLoadGame = function()
+            if not SaveManager.hasSave() then
+                GameState.addMessage("暂无存档", "warning")
+                return
+            end
+            GameUI.hideSettings()
+            ContinueGame()
+        end,
+
         onToggleMusic = function(on)
             print("[Main] 音乐 " .. (on and "开" or "关") .. "（音乐系统开发中）")
         end,
@@ -969,6 +941,11 @@ function HandleUpdate(eventType, eventData)
     -- 主菜单入场动画驱动
     MainMenu.update(dt)
 
+    -- 剧本编辑器帧驱动（首帧全图对焦等）
+    if currentPhase_ == "editor" and ScenarioEditor.onUpdate then
+        ScenarioEditor.onUpdate(dt)
+    end
+
     if currentPhase_ ~= "playing" then return end
 
     -- Advance game time (this triggers hour/day/month/year callbacks)
@@ -1049,7 +1026,9 @@ function HandleKeyDown(eventType, eventData)
 
     -- Escape = deselect province or close panels
     if key == KEY_ESCAPE then
-        if GameUI.isDiplomacyVisible() then
+        if GameUI.isSettingsVisible() then
+            GameUI.hideSettings()
+        elseif GameUI.isDiplomacyVisible() then
             GameUI.hideDiplomacy()
         elseif GameUI.isProvincePanelVisible() then
             GameUI.hideProvincePanel()

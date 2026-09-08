@@ -180,4 +180,59 @@ function SaveManager.getSummary()
     }
 end
 
+
+
+-- ============================================================================
+-- 剧本（Scenario）读写：与存档同结构，独立文件 scenario.json
+-- 编辑器产物；开局时写回 save.json 复用整个读档管线
+-- ============================================================================
+local SCENARIO_PATH = "scenario.json"
+
+--- 是否存在剧本
+---@return boolean
+function SaveManager.hasScenario()
+    if not fileSystem or not fileSystem:FileExists(SCENARIO_PATH) then
+        return false
+    end
+    return true
+end
+
+--- 保存剧本数据（结构 = SaveManager.collect 的反结构）
+---@param data table
+---@return boolean, string|nil
+function SaveManager.saveScenario(data)
+    local ok, json = pcall(cjson.encode, data)
+    if not ok then
+        return false, "剧本序列化失败"
+    end
+    local file = File(SCENARIO_PATH, FILE_WRITE)
+    if not file or not file:IsOpen() then
+        return false, "无法写入剧本文件"
+    end
+    file:WriteString(json)
+    file:Close()
+    return true, nil
+end
+
+--- 读取剧本
+---@return table|nil
+function SaveManager.loadScenario()
+    if not fileSystem or not fileSystem:FileExists(SCENARIO_PATH) then
+        return nil
+    end
+    local file = File(SCENARIO_PATH, FILE_READ)
+    if not file or not file:IsOpen() then
+        return nil
+    end
+    local str = file:ReadString()
+    file:Close()
+    if not str or str == "" then return nil end
+    local ok, data = pcall(cjson.decode, str)
+    if not ok or type(data) ~= "table" then return nil end
+    if data.mapPack and data.mapPack ~= MapPack.activeId then
+        return nil
+    end
+    return data
+end
+
 return SaveManager
