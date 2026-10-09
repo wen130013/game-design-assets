@@ -162,7 +162,9 @@ function MusicManager.play(id)
 
     -- 新曲用另一个源播放，从 0 淡入
     local newIdx = 3 - activeIdx_   -- 1 ↔ 2 交换
+    local Profile = require("core.Profile")
     local sound = cache:GetResource("Sound", track.file)
+    Profile.mark("音乐首次加载(" .. tostring(track.file or "?") .. ")")
     if not sound then return false end
     sound:SetLooped(true)
 

@@ -1,17 +1,18 @@
 -- ============================================================================
--- ScenarioEditor.lua - 剧本编辑器 v2（AoH3 式）
+-- ScenarioEditor.lua - 编辑器 v2（AoH3 式）
 -- 进门即地图；国家增删改（名/色/金粮兵/倾向/都城）、领土划归刷、沙漠地形刷、
 -- 两国关系编辑、剧本存载、以此国开局。
 -- 剧本数据结构 = SaveManager.collect 的反结构；开局走 save.json+ContinueGame 管线。
 -- ============================================================================
 
 local UI          = require("urhox-libs/UI")
-local Factions    = require("data.Factions")
+local Provinces   = require("data.Provinces")
 local Geography   = require("data.Geography")
 local MapPack     = require("data.MapPack")
 local TimeSystem  = require("core.TimeSystem")
 local SaveManager = require("save.SaveManager")
 local MapRenderer = require("map.MapRenderer")
+local WorldGenPanel = require("ui.WorldGenPanel")
 
 local ScenarioEditor = {}
 
@@ -26,7 +27,10 @@ local PERSONALITIES = { "守成", "求存", "霸者", "掠夺" }
 -- ---------------------------------------------------------------------------
 -- 剧本数据构建
 -- ---------------------------------------------------------------------------
-local function buildScenario()
+
+--- 空剧本：全部领土无主（不含任何预设国家；玩家新建国家后从头划归）
+--- 省份集合来自当前地图包，静态沙漠(isWasteland)省保持原样
+local function buildEmptyScenario()
     local s = {
         version = 1,
         mapPack = MapPack.activeId,
@@ -36,35 +40,14 @@ local function buildScenario()
         provinceStates = {},
         relations = {},
     }
-    local best, bn = nil, -1
-    for _, f in ipairs(Factions.data or {}) do
-        if f.provinces and #f.provinces > 0 then
-            s.factions[f.id] = {
-                id = f.id,
-                name = f.name or ("#" .. tostring(f.id)),
-                fullName = f.fullName or (f.name or "?"),
-                color = f.color or { 150, 150, 150, 255 },
-                gold = f.gold or 150,
-                food = f.food or 120,
-                armySize = f.armySize or 2000,
-                prestige = f.prestige or 50,
-                stability = f.stability or 70,
-                morale = 100,
-                alive = true,
-                capitalId = f.capitalId,
-                provinces = {},
-                aiPersonality = f.aiPersonality or "守成",
+    for _, prov in ipairs(Provinces.data or {}) do
+        if prov.id and not prov.isOcean then
+            s.provinceStates[tostring(prov.id)] = {
+                ownerId = nil,
+                isWasteland = prov.isWasteland or false,
             }
-            for _, pid in ipairs(f.provinces) do
-                s.factions[f.id].provinces[#s.factions[f.id].provinces + 1] = pid
-                s.provinceStates[tostring(pid)] = { ownerId = f.id }
-            end
-            if #s.factions[f.id].provinces > bn then
-                best, bn = f.id, #s.factions[f.id].provinces
-            end
         end
     end
-    s.playerFactionId = best
     return s
 end
 
@@ -75,7 +58,48 @@ end
 function ScenarioEditor.show(opts)
     opts = opts or {}
 
-    local scenario = SaveManager.loadScenario() or buildScenario()
+    -- 默认空剧本（全部领土无主，无预设国家）；如需读回已存剧本用左侧「载入剧本」
+    local scenario = buildEmptyScenario()
+
+    -- ============================================================
+    -- 编辑器底图 = "无主底图"：底图上的可玩省统一为无主羊皮纸色，
+    -- 避免旧春秋国家色残留在画面上；退出/开局前恢复政治底图。
+    -- 整图包（eu4）切整图；只带瓦片的老包切瓦片前缀。
+    -- （无主底图由 gen_neutral_tiles.py / make_whole_images.py 从
+    --   province_id 位图染色生成，仅 eu4 包提供；其他地图包不切换。）
+    -- ============================================================
+    local origWhole      = MapPack.WHOLE_IMAGE_PATH
+    local origWholeHalf  = MapPack.WHOLE_IMAGE_HALF_PATH
+    local origTilePattern = MapPack.TILE_PATH_PATTERN
+    local neutralOn = false
+    if MapPack.activeId == "eu4" then
+        if MapPack.NEUTRAL_WHOLE_IMAGE_PATH then
+            MapPack.WHOLE_IMAGE_PATH      = MapPack.NEUTRAL_WHOLE_IMAGE_PATH
+            MapPack.WHOLE_IMAGE_HALF_PATH = MapPack.NEUTRAL_WHOLE_IMAGE_HALF_PATH
+        else
+            MapPack.TILE_PATH_PATTERN = "image/eu4/neutral_tiles/map_%d_%d.png"
+        end
+        neutralOn = true
+    end
+    local function restoreBaseMap()
+        if neutralOn then
+            MapPack.WHOLE_IMAGE_PATH      = origWhole
+            MapPack.WHOLE_IMAGE_HALF_PATH = origWholeHalf
+            MapPack.TILE_PATH_PATTERN     = origTilePattern
+            neutralOn = false
+        end
+    end
+    -- 包装出口回调：先恢复政治底图再执行原有 onStart/onBack
+    local origOnStart = opts.onStart
+    local origOnBack = opts.onBack
+    opts.onStart = function(data)
+        restoreBaseMap()
+        if origOnStart then origOnStart(data) end
+    end
+    opts.onBack = function()
+        restoreBaseMap()
+        if origOnBack then origOnBack() end
+    end
 
     -- 编辑用活 gameState（Widget 实时读取归属/颜色/沙漠）
     local editorGS = { provinces = {}, factions = scenario.factions, playerFactionId = scenario.playerFactionId }
@@ -96,6 +120,8 @@ function ScenarioEditor.show(opts)
     local mode = "off"            -- off / paint / desert
     local otherRelId = nil        -- 关系编辑：对方国家
     local mapWidget = nil
+    local pageRoot = nil          -- 本页 UI 根（世界生成面板挂载用）
+
 
     local listRefs = {}           -- [fid] = { hl, nameLabel, countLabel }
     local msgLabel = nil
@@ -108,6 +134,126 @@ function ScenarioEditor.show(opts)
 
     local function setMsg(text)
         if msgLabel then msgLabel:SetText(text) end
+    end
+
+    -- -------------------------------------------------------------------------
+    -- 世界生成：清空现有国家，按邻接关系随机建国并划分全部领土
+    -- -------------------------------------------------------------------------
+
+    --- 随机生成世界（多源"轮流扩展"，保证各国领土大体均衡）
+    ---@param count number 国家数量
+    ---@return number assigned 已划分的省数
+    local function randomizeWorld(count)
+        count = math.max(1, math.floor(count or 12))
+        -- 1) 重置归属与国家
+        scenario.factions = {}
+        for _, ps in pairs(scenario.provinceStates) do
+            ps.ownerId = nil
+        end
+        selectedId = nil
+
+        -- 2) 收集陆地省并打乱
+        local land = {}
+        for pid, ps in pairs(scenario.provinceStates) do
+            if not ps.isWasteland then
+                land[#land + 1] = tonumber(pid)
+            end
+        end
+        if #land == 0 then return 0 end
+        for i = #land, 2, -1 do
+            local j = math.random(i)
+            land[i], land[j] = land[j], land[i]
+        end
+
+        -- 3) 建国（颜色克隆自调色板，避免共享引用串色）
+        for i = 1, count do
+            local c = PALETTE[((i - 1) % #PALETTE) + 1]
+            scenario.factions[i] = {
+                id = i, name = "新国" .. i, fullName = "新国" .. i,
+                color = { c[1], c[2], c[3], c[4] },
+                gold = 150, food = 120, armySize = 2000,
+                prestige = 50, stability = 70, morale = 100,
+                alive = true, capitalId = nil, provinces = {},
+                aiPersonality = "守成",
+            }
+        end
+
+        -- 4) 均匀步长挑种子省，多源轮流扩展划分领土
+        local owner = {}       -- pid -> fid
+        local qs, qh = {}, {}  -- 每国队列 + 头指针
+        local step = math.max(1, math.floor(#land / count))
+        for i = 1, count do
+            qs[i] = {}
+            qh[i] = 1
+            local pid = land[math.min(#land, (i - 1) * step + 1)]
+            if pid and not owner[pid] then
+                owner[pid] = i
+                qs[i][#qs[i] + 1] = pid
+            end
+        end
+
+        local active = count
+        while active > 0 do
+            active = 0
+            for i = 1, count do
+                local q = qs[i]
+                if qh[i] <= #q then
+                    active = active + 1
+                    local pid = q[qh[i]]
+                    qh[i] = qh[i] + 1
+                    local prov = Provinces.byId[pid]
+                    local nbs = prov and prov.neighbors
+                    if nbs then
+                        for k = 1, #nbs do
+                            local nb = nbs[k]
+                            if not owner[nb] then
+                                local ps = scenario.provinceStates[tostring(nb)]
+                                if ps and not ps.isWasteland then
+                                    owner[nb] = i
+                                    q[#q + 1] = nb
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
+        -- 5) 写回剧本
+        local assigned = 0
+        for pid, fid in pairs(owner) do
+            local ps = scenario.provinceStates[tostring(pid)]
+            local f = scenario.factions[fid]
+            if ps and f then
+                ps.ownerId = fid
+                f.provinces[#f.provinces + 1] = pid
+                if not f.capitalId then f.capitalId = pid end
+                assigned = assigned + 1
+            end
+        end
+        -- 国家列表按省数降序显示更直观：这里只保证数据正确，列表由 rebuild 读取
+        syncEditorGS()
+        return assigned
+    end
+
+    --- 世界生成面板回调（"生成新世界"）
+    ---@param params table { pack, factionCount, seed, size, provinces, factions }
+    local function onWorldGen(params)
+        -- 地图包：切换后位图/尺寸都变 → 重建 shader 地图层并重挂到 mapWidget
+        if params.pack and params.pack ~= MapPack.activeId then
+            -- ⚠️ 必须用 switchTo（不是 setActive）：setActive 只切"名字"（activeId），
+            --   省份数据 / 渲染常量 / 空间索引还停在旧包 → "旧包省份数据 + 新包尺寸底图"的
+            --   混合态：地图错位、大片空白、按钮高亮与实际地图对不上。
+            --   2026-09-23 修（用户反馈：选国页地图右边一整块空、高亮不符）。
+            MapPack.switchTo(params.pack)
+            setMsg("已切换地图包：" .. tostring(params.pack))
+        end
+        local seed = tonumber(params.seed)
+        if seed then math.randomseed(seed) end
+        local assigned = randomizeWorld(params.factionCount or 12)
+        if opts.rebuild then opts.rebuild() end
+        setMsg(string.format("已随机生成世界：%d 国 · 划分 %d 省（种子 %s）",
+            params.factionCount or 12, assigned, tostring(params.seed)))
     end
 
     local function selectedFaction()
@@ -210,7 +356,12 @@ function ScenarioEditor.show(opts)
         }
         selectedId = nid
         editorGS.playerFactionId = nid
-        setMsg("已新建国家（用「划归」刷给它领土）")
+        -- 新建后自动进入「划归」模式：直接点地图领土划给新国家
+        if mode ~= "paint" then
+            mode = "paint"
+            if modeBtnRef then modeBtnRef:SetText("模式:划归选中") end
+        end
+        setMsg("已新建国家——点击地图上的无主领土把它划给「" .. scenario.factions[nid].name .. "」")
         if opts.rebuild then opts.rebuild() end
     end
 
@@ -256,8 +407,14 @@ function ScenarioEditor.show(opts)
     local function fitAll()
         if not mapWidget or not mapWidget.GetAbsoluteLayout then return false end
         local l = mapWidget:GetAbsoluteLayout()
-        if not l or not l.w or l.w <= 0 then return false end
+        -- ⚠️ 布局未就绪时 GetAbsoluteLayout 可能返回 NaN 而非 0：
+        --   `l.w <= 0` 对 NaN 恒为 false，会拿 NaN 算出 zoom=NaN → 整图黑。
+        -- 必须显式排除非有限数。
+        if not l or not l.w or not l.h then return false end
+        if l.w ~= l.w or l.h ~= l.h then return false end      -- NaN 防护
+        if l.w <= 0 or l.h <= 0 then return false end
         local z = math.min(l.w / Geography.MAP_W, l.h / Geography.MAP_H) * 0.96
+        if z ~= z or z <= 0 then return false end              -- 计算 NaN 防护
         mapWidget.camX = Geography.MAP_W * 0.5
         mapWidget.camY = Geography.MAP_H * 0.5
         mapWidget.zoom = z
@@ -265,26 +422,10 @@ function ScenarioEditor.show(opts)
         if mapWidget._clampCamera then mapWidget:_clampCamera() end
         return true
     end
-    -- 调试读数(定位预览黑地图:显示布局/缩放/镜头)
-    local dbgLabel = nil
-    local dbgTicks = 0
     local fitted = false
     ScenarioEditor.onUpdate = function()
-        dbgTicks = dbgTicks + 1
         if (not fitted) and fitAll() then
             fitted = true
-            setMsg("全图对焦完成")
-        end
-        if (dbgTicks % 10 == 0) and mapWidget.GetAbsoluteLayout then
-            local l = mapWidget:GetAbsoluteLayout()
-            local dbg = UI.FindById and UI.FindById("editorDbgLabel")
-            if dbg then
-                dbg:SetText(string.format(
-                    "DBG 布局:%sx%s 缩放:%.3f 镜头:%.0f,%.0f 帧:%d%s",
-                    l and math.floor(l.w) or -1, l and math.floor(l.h) or -1,
-                    mapWidget.zoom or -1, mapWidget.camX or -1, mapWidget.camY or -1,
-                    dbgTicks, fitted and " 已对焦" or " 对焦中"))
-            end
         end
     end
 
@@ -298,9 +439,24 @@ function ScenarioEditor.show(opts)
         end
     end
 
+    -- 编辑态实时着色（MapWidget 的 overlayColorFn 钩子）：已划归省份按国家色填充，
+    -- 无主/沙漠省不填（露出羊皮纸/沙漠底图），玩家一划归立刻看到领土颜色
+    mapWidget.overlayColorFn = function(pid)
+        local ps = scenario.provinceStates[tostring(pid)]
+        if not ps or ps.isWasteland or not ps.ownerId then
+            return nil
+        end
+        local f = scenario.factions[ps.ownerId]
+        if not f then return nil end
+        return f.color[1], f.color[2], f.color[3]
+    end
+
     -- -------------------------------------------------------------------------
     -- 通用控件
     -- -------------------------------------------------------------------------
+    -- 工具条按钮（2026-09-13 改）：原来是半透明奶油色（{255,250,236,120}），
+    -- 压在透明/白底上几乎看不见 → 改成**不透明深底 + 米色描边/文字**，
+    -- 跟游戏内顶栏同一套视觉；高度 36→42（手机可点）。
     local function paperBtn(text, onClick, o)
         if type(onClick) == "table" and type(o) == "function" then
             onClick, o = o, onClick
@@ -308,14 +464,14 @@ function ScenarioEditor.show(opts)
         o = o or {}
         return UI.Button {
             text = text,
-            width = o.width, height = o.height or 36,
+            width = o.width, height = o.height or 42,
             fontSize = o.fontSize or 14,
             fontFamily = "gufeng", fontWeight = "bold",
-            textColor = o.textColor or { 56, 36, 18, 255 },
-            backgroundColor = { 255, 250, 236, 120 },
-            hoverBackgroundColor = { 255, 244, 210, 190 },
-            pressedBackgroundColor = { 214, 190, 148, 200 },
-            borderColor = { 110, 82, 50, 200 }, borderWidth = 1,
+            textColor = o.textColor or { 240, 226, 196, 255 },
+            backgroundColor = { 38, 32, 26, 248 },
+            hoverBackgroundColor = { 62, 52, 40, 252 },
+            pressedBackgroundColor = { 28, 23, 18, 252 },
+            borderColor = { 152, 118, 72, 220 }, borderWidth = 1,
             borderRadius = 8,
             onClick = onClick,
         }
@@ -323,7 +479,7 @@ function ScenarioEditor.show(opts)
 
     local function sectionLabel(text)
         return UI.Label { text = text, fontSize = 14, fontFamily = "gufeng",
-                          fontWeight = "bold", fontColor = { 150, 108, 52, 255 },
+                          fontWeight = "bold", fontColor = { 214, 178, 110, 255 },
                           width = 240 }
     end
 
@@ -459,7 +615,7 @@ function ScenarioEditor.show(opts)
             else
                 setMsg("请先在地图上点一个省份")
             end
-        end, { width = 240, height = 34, fontSize = 13 })
+        end, { width = 240, height = 40, fontSize = 13 })
 
         -- 关系编辑
         children[#children + 1] = sectionLabel("与该国关系")
@@ -548,7 +704,7 @@ function ScenarioEditor.show(opts)
             setMsg(mode == "paint" and "点省份→划给选中国家"
                 or mode == "desert" and "点省份→切换 可占领⇄沙漠荒地"
                 or "已关闭编辑刷")
-        end, { height = 32, fontSize = 12, width = 150 })
+        end, { height = 40, fontSize = 13, width = 168 })
 
         return {
             UI.Panel {
@@ -563,7 +719,14 @@ function ScenarioEditor.show(opts)
                         else
                             setMsg("请先在地图上点一个省份")
                         end
-                    end, { height = 32, fontSize = 12, width = 150 }),
+                    end, { height = 40, fontSize = 13, width = 168 }),
+                    paperBtn("生成新世界", function()
+                        if not pageRoot then return end
+                        WorldGenPanel.show({
+                            root = pageRoot,
+                            onApply = onWorldGen,
+                        })
+                    end, { height = 40, fontSize = 13, width = 168 }),
                 },
             },
             UI.Panel {
@@ -571,7 +734,7 @@ function ScenarioEditor.show(opts)
                 children = {
                     paperBtn("全 图", function()
                         if not fitAll() then setMsg("布局未就绪,稍后再试") end
-                    end, { height = 30, fontSize = 12, width = 76 }),
+                    end, { height = 40, fontSize = 13, width = 88 }),
                 },
             },
             UI.Panel {
@@ -581,7 +744,7 @@ function ScenarioEditor.show(opts)
                     paperBtn("保存剧本", function()
                         local ok, reason = SaveManager.saveScenario(scenario)
                         setMsg(ok and "剧本已保存" or ("保存失败:" .. tostring(reason)))
-                    end, { height = 32, fontSize = 12, width = 130 }),
+                    end, { height = 40, fontSize = 13, width = 146 }),
                     paperBtn("载入剧本", function()
                         local d = SaveManager.loadScenario()
                         if d then
@@ -594,7 +757,7 @@ function ScenarioEditor.show(opts)
                         else
                             setMsg("没有已保存的剧本")
                         end
-                    end, { height = 32, fontSize = 12, width = 130 }),
+                    end, { height = 40, fontSize = 13, width = 146 }),
                     paperBtn("以此国开局", function()
                         ScenarioEditor.onUpdate = nil
                         local f = selectedFaction()
@@ -604,12 +767,12 @@ function ScenarioEditor.show(opts)
                         else
                             setMsg("请先选中一个国家")
                         end
-                    end, { height = 32, fontSize = 12, width = 130,
-                           textColor = { 120, 40, 24, 255 } }),
+                    end, { height = 40, fontSize = 13, width = 146,
+                           textColor = { 255, 158, 120, 255 } }),
                     paperBtn("返回主菜单", function()
                         ScenarioEditor.onUpdate = nil
                         if opts.onBack then opts.onBack() end
-                    end, { height = 32, fontSize = 12, width = 130 }),
+                    end, { height = 40, fontSize = 13, width = 146 }),
                 },
             },
         }
@@ -623,10 +786,10 @@ function ScenarioEditor.show(opts)
         local sideChildren = {}
 
         sideChildren[#sideChildren + 1] = UI.Label {
-            text = "剧本编辑器", fontSize = 20, width = 240,
+            text = "编辑器", fontSize = 20, width = 240,
             fontFamily = "gufeng", fontWeight = "bold", fontColor = { 240, 210, 120, 255 },
         }
-        msgLabel = UI.Label { text = "模式:关——开「划归」点省份划给选中国家", fontSize = 11,
+        msgLabel = UI.Label { text = "空剧本:先「＋新建国家」,再点地图领土划归(全图无主)", fontSize = 11,
             width = 240, fontColor = { 214, 200, 170, 220 } }
         sideChildren[#sideChildren + 1] = msgLabel
 
@@ -642,11 +805,11 @@ function ScenarioEditor.show(opts)
             flexDirection = "row", gap = 6, width = "100%",
             children = {
                 paperBtn("＋新建国家", function() newFaction() end,
-                    { width = 116, height = 34, fontSize = 13 }),
+                    { width = 124, height = 40, fontSize = 13 }),
                 paperBtn("－删除选中", function()
                     if selectedId then deleteFaction(selectedId) end
-                end, { width = 116, height = 34, fontSize = 13,
-                      textColor = { 146, 58, 40, 255 } }),
+                end, { width = 124, height = 40, fontSize = 13,
+                      textColor = { 255, 148, 128, 255 } }),
             },
         }
 
@@ -678,27 +841,22 @@ function ScenarioEditor.show(opts)
             },
         }
 
-        local mapPanel = UI.Panel { flexGrow = 1, children = { mapWidget } }
-        local dbgLabel = UI.Panel {
-            position = "absolute", left = 8, bottom = 34,
-            backgroundColor = { 0, 0, 0, 200 },
-            paddingLeft = 6, paddingRight = 6, paddingTop = 3, paddingBottom = 3,
-            children = {
-                UI.Label { id = "editorDbgLabel", text = "DBG init...", fontSize = 11,
-                           width = 320, fontColor = { 255, 214, 90, 255 } },
-            },
-        }
-        mapPanel:AddChild(dbgLabel)
+        local mapPanel = UI.Panel { flexGrow = 1, backgroundColor = { 12, 18, 30, 255 },
+                                    children = { mapWidget } }
         for _, w in ipairs(buildMapOverlay()) do
             mapPanel:AddChild(w)
         end
 
+        -- 根面板 = 不透明深色底（2026-09-13 修）：原来是透明的（3D 时代防止盖住
+        -- UI 之下的 3D 地图层），3D 废弃后透明底在手机上会透出平台白色，
+        -- 浅色按钮全糊掉（实测截图 42% 像素 alpha=0）。
         local root = UI.Panel {
             width = "100%", height = "100%",
-            backgroundColor = { 12, 12, 14, 255 },
+            backgroundColor = { 16, 13, 10, 255 },
             flexDirection = "row",
             children = { mapPanel, side },
         }
+        pageRoot = root
         UI.SetRoot(root)
     end
 

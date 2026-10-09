@@ -1,0 +1,9 @@
+<material>
+    <technique name="Techniques/TileTerrainBlend.xml" />
+    <texture unit="0" name="uuid://BqWB0RHjPUAJAgMSBAeavXZa" filter="nearest" />
+    <texture unit="1" type="Texture2DArray" name="uuid://AidrCXHYbEphqjvKq47BExMM" />
+    <texture unit="2" type="Texture2DArray" name="uuid://AVcASZTAHsiCFTsXy4rdfKdy" />
+    <parameter name="ControlMapParams" value="0.000000 0.000000 1.562500 0" />
+    <parameter name="ControlMapSize" value="193 193" />
+    <parameter name="DetailTiling" value="0.39 0.39" />
+</material>

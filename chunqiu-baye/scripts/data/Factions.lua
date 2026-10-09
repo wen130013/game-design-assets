@@ -15,13 +15,31 @@
 ---   42(巴东), 43(楚西), 44(楚南), 45(越北), 46(蜀地),
 ---   47(南蛮), 48(百濮), 49(百越), 50(百越东)
 
+local MapPack = require("data.MapPack")
+
 local Factions = {}
 
 -- 模组化架构：本体不内置势力。
 -- 当前加载"示例随机势力"（GeneratedFactions.lua）用于查看地图颜色效果；
 -- 正式势力由模组系统提供（mods/ 目录）。
-local GeneratedFactions = require("data.GeneratedFactions")
-Factions.data = GeneratedFactions
+-- ⚠️ 势力数据的**省份 id 与地图包绑定**（同一个 id 在不同包里是不同地方），所以按包提供：
+--   * eu4（旧大陆）= 示例随机势力（按 eu4 省份 id 生成，看地图颜色用）
+--   * world（新世界）= **无势力**（用户 2026-09-15 定：新世界"只是看一下地图长什么样，
+--     不要任何国家"）。将来要给某张图配势力，在 FACTION_SOURCES 里加一行即可。
+---@type table<string, table>
+local FACTION_SOURCES = {
+    eu4 = require("data.GeneratedFactions"),
+}
+
+--- 按**当前地图包**重载势力数据（换包必须跟着换；`MapPack.switchTo` 会调它）
+function Factions.reload()
+    Factions.data = FACTION_SOURCES[MapPack.activeId] or {}
+    Factions._provinceToFaction = nil   -- 省份→势力索引按旧表建过，失效
+    print(string.format("[Factions] 重载：%d 个势力（包 %s）",
+        #Factions.data, tostring(MapPack.activeId)))
+end
+
+Factions.reload()   -- 首次加载（require 时执行一次，行为与旧版一致）
 
 --- Color used for unowned / neutral provinces
 Factions.neutralColor = {120, 120, 120, 255}

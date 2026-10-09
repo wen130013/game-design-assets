@@ -26,38 +26,41 @@ local AI  = GameConfig.AI
 -- =========================================================================
 -- 攻击实力比阈值：超过此比率时AI才考虑宣战
 -- 攻击概率：满足实力比后每月宣战的概率
+-- 人格参数（2026-09-17 调整：宣战概率整体 ÷6 —— 用户："他怎么经常在打仗"）
+--   原来是"每月 35% 概率宣战" → 平均 3 个月就打一仗；现在霸者也只有 6%，
+--   加上停战期 5 年（EU4 的 truce）与"关系≥0 不打"的门槛，战争变成稀罕事。
 local AI_PERSONALITY = {
     ["霸者"] = {
         attackRatio   = 1.5,   -- 实力比 > 1.5 就考虑进攻
-        attackChance  = 0.35,  -- 满足条件时 35% 概率宣战
+        attackChance  = 0.06,  -- 满足条件时 6% 概率宣战（原 35%）
         peaceRatio    = 0.5,   -- 实力比 < 0.5 才考虑求和
         peaceChance   = 0.3,   -- 求和概率较低（不轻易认输）
         improveChance = 0.05,  -- 很少主动改善关系
     },
     ["守成"] = {
         attackRatio   = 2.0,   -- 只攻击非常弱的邻国
-        attackChance  = 0.2,   -- 概率较低
+        attackChance  = 0.03,  -- 概率较低（原 20%）
         peaceRatio    = 0.7,   -- 较早考虑求和
         peaceChance   = 0.6,   -- 比较愿意求和
         improveChance = 0.2,   -- 偶尔改善关系
     },
     ["求存"] = {
         attackRatio   = 2.5,   -- 只在绝对优势时进攻（几乎不会）
-        attackChance  = 0.1,   -- 极低概率
+        attackChance  = 0.02,  -- 极低概率（原 10%）
         peaceRatio    = 0.8,   -- 稍有劣势就求和
         peaceChance   = 0.8,   -- 非常愿意求和
         improveChance = 0.4,   -- 经常改善关系（结交强者）
     },
     ["商贾"] = {
         attackRatio   = 2.0,   -- 不主动进攻，除非对方极弱
-        attackChance  = 0.1,   -- 很低概率
+        attackChance  = 0.02,  -- 很低概率（原 10%）
         peaceRatio    = 0.7,   -- 较早求和
         peaceChance   = 0.7,   -- 愿意求和
         improveChance = 0.35,  -- 经常改善关系
     },
     ["掠夺"] = {
         attackRatio   = 1.2,   -- 稍有优势就进攻（蛮族好战）
-        attackChance  = 0.45,  -- 高概率宣战
+        attackChance  = 0.08,  -- 最高的一档也只有 8%（原 45%）
         peaceRatio    = 0.4,   -- 只有大幅劣势时才求和
         peaceChance   = 0.2,   -- 很少求和
         improveChance = 0.02,  -- 几乎不改善关系
@@ -120,7 +123,9 @@ local function calcStrength(gameState, factionId)
         provinceCount = provinceCount + 1
     end
 
-    return armySize + population / 10 + provinceCount * 1000
+    -- ⚠️ 与 DiplomacySystem.calcStrength 同一个公式，改一处必须改另一处
+    --   （2026-09-17 重新配平：兵力 ÷5 后，原来的 `省数×1000`/`人口/10` 会盖过军队本身）
+    return armySize + population / 100 + provinceCount * 100
 end
 
 --- 获取势力的所有邻国ID列表
@@ -226,16 +231,20 @@ local function aiEvaluateWar(gameState, factionId, personality)
 
                 if ratio > personality.attackRatio then
                     local relValue = DiplomacySystem.getRelationValue(gameState, factionId, nid)
-                    local relModifier = 1.0
-                    if relValue < -50 then
-                        relModifier = 1.5
-                    elseif relValue > 30 then
-                        relModifier = 0.3
-                    end
+                    -- 门槛（2026-09-17，照 EU4 "需要理由"）：关系不算差就不打
+                    --   关系 ≥ DECLARE_WAR_MAX_RELATION(0) → 视为无仇，本次不考虑
+                    if relValue < (AI.DECLARE_WAR_MAX_RELATION or 0) then
+                        local relModifier = 1.0
+                        if relValue < -50 then
+                            relModifier = 1.5
+                        elseif relValue > 30 then
+                            relModifier = 0.3
+                        end
 
-                    if math.random() < personality.attackChance * relModifier then
-                        DiplomacySystem.declareWar(gameState, factionId, nid)
-                        return  -- 每回合最多宣一次战
+                        if math.random() < personality.attackChance * relModifier then
+                            DiplomacySystem.declareWar(gameState, factionId, nid)
+                            return  -- 每回合最多宣一次战
+                        end
                     end
                 end
             end
@@ -283,6 +292,21 @@ local function aiRecruit(gameState, factionId)
     local f = gameState.factions[factionId]
     if not f then return end
 
+    -- 节制 A：冷却（2026-09-17 用户："招出军队速度也太频繁了"）
+    --   原来每月都可能征 → 兵力无限滚雪球；现在两次征兵至少隔 RECRUIT_COOLDOWN 个月
+    if (f.recruitCooldown or 0) > 0 then
+        f.recruitCooldown = f.recruitCooldown - 1
+        return
+    end
+
+    -- 节制 B：兵力上限（EU4 force limit 思路）—— 国家能养的兵 = 省份数 × 每省上限
+    local provList0 = gameState.factionProvinces and gameState.factionProvinces[factionId]
+        or f.provinces or {}
+    local armyCap = #provList0 * (AI.ARMY_CAP_PER_PROVINCE or 2500)
+    if armyCap > 0 and (f.armySize or 0) >= armyCap then
+        return
+    end
+
     local myStr = calcStrength(gameState, factionId)
     local neighbors = getNeighborFactions(gameState, factionId)
 
@@ -306,43 +330,26 @@ local function aiRecruit(gameState, factionId)
 
     if not needRecruit then return end
 
-    -- 征兵落点：首都省（无首都则第一个有主省）
-    local provList = f.provinces
-    if gameState.factionProvinces and gameState.factionProvinces[factionId] then
-        provList = gameState.factionProvinces[factionId]
+    -- 玩家、AI、自动补员共用兵源与费用规则；只从脱战且仍受控制的本国省征召。
+    local provList = f.provinces or {}
+    local wanted = math.min(GameConfig.Military.RECRUIT_BATCH,
+        MilitarySystem.recruitRoom(gameState, f))
+    if wanted <= 0 then return end
+    local candidates = {}
+    if f.capitalId then candidates[#candidates + 1] = f.capitalId end
+    for _, pid in ipairs(provList) do
+        if pid ~= f.capitalId then candidates[#candidates + 1] = pid end
     end
-    if not provList or #provList == 0 then return end
-
-    local capProv = gameState.provinces[f.capitalId] or gameState.provinces[provList[1]]
-    if not capProv or capProv.isWasteland then
-        for _, pid in ipairs(provList) do
-            local p = gameState.provinces[pid]
-            if p and not p.isWasteland then
-                capProv = p
-                break
+    for _, pid in ipairs(candidates) do
+        if MilitarySystem.canRecruitIn(gameState, factionId, pid) then
+            local ok, count = MilitarySystem.recruit(gameState, factionId, pid, wanted)
+            if ok then
+                f.recruitCooldown = AI.RECRUIT_COOLDOWN or 6
+                addLog(gameState, factionName(factionId) .. "征兵" .. count .. "人")
+                return
             end
         end
     end
-    if not capProv then return end
-
-    -- 与玩家一致：每月征兵上限 = 省人口 × 征兵率
-    local batch = GameConfig.Military.RECRUIT_BATCH
-    local monthlyMax = math.floor(capProv.population * GameConfig.Military.RECRUIT_RATE)
-    local count = math.min(batch, monthlyMax)
-    if count <= 0 then return end
-
-    local batches = math.ceil(count / batch)
-    local goldCost = GameConfig.Military.RECRUIT_COST_GOLD * batches * 5
-    local foodCost = GameConfig.Military.RECRUIT_COST_FOOD * batches * 5
-    if (f.gold or 0) < goldCost or (f.food or 0) < foodCost then return end
-
-    f.gold = f.gold - goldCost
-    f.food = f.food - foodCost
-    f.armySize = (f.armySize or 0) + count
-    capProv.garrison = (capProv.garrison or 0) + count
-
-    addLog(gameState,
-        factionName(factionId) .. "征兵" .. count .. "人")
 end
 
 --- AI 战争执行（2026-08-31 新增：AI 真正调军打仗）
@@ -362,11 +369,8 @@ local function aiConductWar(gameState, factionId)
     local f = gameState.factions[factionId]
     if not f then return end
 
-    local provList = f.provinces
-    if gameState.factionProvinces and gameState.factionProvinces[factionId] then
-        provList = gameState.factionProvinces[factionId]
-    end
-    if not provList or #provList == 0 then return end
+    local provList = MilitarySystem.controlledProvinces(gameState, factionId)
+    if #provList == 0 then return end
 
     -- 正在交战的敌国集合
     local enemySet = {}
@@ -377,7 +381,21 @@ local function aiConductWar(gameState, factionId)
             hasWar = true
         end
     end
-    if not hasWar then return end
+    -- ⚠️ 这里原来写的是 `if not hasWar then return end` —— 和平期直接整个函数返回，
+    --   于是 AI **永远不会去占无主白地**（2026-09-26 用户："这些白色可占领区域我们不去占领
+    --   然后这些AI也不去"）。现在改成：没仗打也要继续往下走，去抢白地（见下面的白地阶段）。
+
+    -- 输方停手（2026-09-18 用户："±100 不强制结算：输方停手"）
+    --   战争分已被打到 −100（= 对方 +100）的敌人 → 这场仗**不再进攻**：
+    --   不自动议和、不退出战争，就地停手等对方来结算（玩家随时可点右下角战旗进和谈）
+    local WarSystem = require("systems.WarSystem")
+    local exhausted = {}      -- enemyId -> true（我在这场的分数已垫底 → 对该敌停手）
+    for fid in pairs(enemySet) do
+        local war = WarSystem.findWar(gameState, factionId, fid)
+        if war and WarSystem.getScore(gameState, war, factionId) <= -99.999 then
+            exhausted[fid] = true
+        end
+    end
 
     -- 己方省集合 + 前线识别（邻省含敌方省份）
     local ownSet = {}
@@ -385,19 +403,45 @@ local function aiConductWar(gameState, factionId)
 
     local frontline = {}      -- pid -> true（己方前线省）
     local enemyTargets = {}   -- pid -> {敌省pid, ...}
+    local claimTargets = {}   -- pid -> {无主白地pid, ...}（2026-09-26 新增）
     for _, pid in ipairs(provList) do
         local prov = gameState.provinces[pid]
-        if prov and prov.neighbors then
+        if prov and prov.neighbors and not (gameState.battles and gameState.battles[pid]) then
             for _, nid in ipairs(prov.neighbors) do
                 local target = gameState.provinces[nid]
-                local owner = target and target.ownerId or nil
-                if owner and owner ~= factionId and not target.isWasteland then
-                    if enemySet[owner] then
-                        frontline[pid] = true
-                        enemyTargets[pid] = enemyTargets[pid] or {}
-                        enemyTargets[pid][#enemyTargets[pid] + 1] = nid
+                local owner = MilitarySystem.controller(target)
+                if target and not target.isWasteland and not target.isOcean then
+                    if owner and owner ~= factionId then
+                        -- 敌省（开战才打）
+                        if enemySet[owner] and not exhausted[owner] then
+                            frontline[pid] = true
+                            enemyTargets[pid] = enemyTargets[pid] or {}
+                            enemyTargets[pid][#enemyTargets[pid] + 1] = nid
+                        end
+                    elseif not owner then
+                        -- 无主白地（2026-09-26）：谁都能占，不要求开战
+                        claimTargets[pid] = claimTargets[pid] or {}
+                        claimTargets[pid][#claimTargets[pid] + 1] = nid
                     end
                 end
+            end
+        end
+    end
+
+    -- 阶段 0：抢占无主白地（2026-09-26 用户："这些白色可占领区域…AI也不去"）
+    --   白地不设防（garrison = 0），派兵过去直接 occupy —— 和玩家的规则完全一致。
+    --   留守要求比打仗低（只需留一点守家），避免 AI 把老本全押出去。
+    local CLAIM_KEEP = AI.CLAIM_KEEP_GARRISON or 200
+    for _, pid in ipairs(provList) do
+        local targets = claimTargets[pid]
+        if targets and #targets > 0 then
+            local prov = gameState.provinces[pid]
+            local g = prov and prov.garrison or 0
+            local send = math.floor(g - CLAIM_KEEP)
+            if send >= (AI.CLAIM_MIN_TROOPS or 100) then
+                -- 白地无人防守，派多少都能占；按比例派但不掏空老本
+                local nid = targets[1]
+                MilitarySystem.moveArmy(gameState, factionId, pid, nid, send)
             end
         end
     end
@@ -533,6 +577,73 @@ end
 ---@return table|nil config
 function AIManager.getPersonalityConfig(personalityName)
     return AI_PERSONALITY[personalityName]
+end
+
+-- =========================================================================
+-- AI 避损耗（2026-09-19 照 CK3）
+--
+-- CK3 的 AI "极度厌恶损耗"：军队呆在养不起的地方会**主动调走 / 拆兵**。
+-- 我们的对应物 = 驻军超过该省补给容量时，把**超出的部分**就近搬到
+-- 相邻的、容量还有富余的**自家**省份。
+--
+-- 简化点（有意为之）：
+--   * 瞬间转移（当成"就近调防"，每月只做一次、量不大，不做行军过程）
+--   * 只在**明显超编**时才动（超过容量 120%），避免把部队拆得满地图都是
+--   * 只对 AI 生效；玩家的兵玩家自己管（CK3 里玩家也是手动拆兵）
+-- =========================================================================
+
+---@param gameState table
+---@param faction table|nil
+---@return number moved 调走的兵力总数
+function AIManager.avoidSupplyAttrition(gameState, faction)
+    if not gameState or not faction or faction.alive == false then return 0 end
+    local list = MilitarySystem.controlledProvinces(gameState, faction.id)
+    if #list == 0 then return 0 end
+
+    local moved = 0
+    -- 先收集超编的省（边遍历边改 garrison 会让判断错位）
+    local overflows = {}
+    for i = 1, #list do
+        local prov = gameState.provinces[list[i]]
+        if prov and not (gameState.battles and gameState.battles[prov.id]) then
+            local g = prov.garrison or 0
+            local cap = MilitarySystem.supplyCapacity(prov, prov.ownerId == faction.id)
+            -- 超过 120% 才动手（轻微的兵不吃亏，别天天搬来搬去）
+            if g > cap * 1.2 then
+                overflows[#overflows + 1] = { pid = list[i], over = g - cap, prov = prov }
+            end
+        end
+    end
+    if #overflows == 0 then return 0 end
+
+    for _, item in ipairs(overflows) do
+        local prov = item.prov
+        -- 找"容量最富余"的相邻自家省
+        local bestPid, bestRoom = nil, 0
+        for _, npid in ipairs(prov.neighbors or {}) do
+            local np = gameState.provinces[npid]
+            if np and MilitarySystem.controller(np) == faction.id
+                and not (gameState.battles and gameState.battles[npid]) then
+                local room = MilitarySystem.supplyCapacity(np, np.ownerId == faction.id) - (np.garrison or 0)
+                if room > bestRoom then
+                    bestRoom, bestPid = room, npid
+                end
+            end
+        end
+        if bestPid then
+            local amount = math.min(item.over, math.floor(bestRoom))
+            if amount >= 1 then
+                prov.garrison = (prov.garrison or 0) - amount
+                local np = gameState.provinces[bestPid]
+                MilitarySystem.mergeTroops(np, "garrison", {
+                    size = amount, morale = prov.morale,
+                    unitMix = require("data.Units").mixOf(prov, faction),
+                }, faction)
+                moved = moved + amount
+            end
+        end
+    end
+    return moved
 end
 
 return AIManager

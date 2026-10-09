@@ -106,6 +106,96 @@ local function generateHeir(factionId)
     }
 end
 
+--- 旧君主去世：标记死亡并从角色表移出（2026-09-29）
+---   ⚠️ **保留** f.leaderId 之外的信息：childIds 在角色对象上，
+---   移出列表不影响"子女还能找到父亲"（getById 走 id 索引，不依赖列表）。
+---   为什么要移出：不然朝廷面板/人才列表里会一直挂着已死的人。
+---@param gameState table
+---@param factionId number
+function LeaderSystem._removeRulerFromCharacters(gameState, factionId)
+    local f = gameState and gameState.factions and gameState.factions[factionId]
+    if not f or not f.leaderId then return end
+    local list = f.characters
+    if list then
+        for i = #list, 1, -1 do
+            if list[i].id == f.leaderId then
+                list[i].alive = false
+                list[i].post = nil
+                -- ⚠️ 只从**活人列表**移出，**全局索引仍保留**（2026-09-29）：
+                --   血脉追溯要靠 getById 找父辈。如果索引也删了，
+                --   子女的 parentId 就查不到对象 → 继承顺序算不出血缘 → 断链。
+                table.remove(list, i)
+                break
+            end
+        end
+    end
+    -- 注意：**不清空 f.leaderId** —— CharacterSystem.getById 靠它查旧君主，
+    --   而 applySuccession 之后会把它改指向新君。这里只负责"人不在列表里"。
+end
+
+--- 君主更替后，把新君同步进 CharacterSystem 的角色表（2026-09-28）
+---   做三件事：
+---     ① 旧君主角色标记 alive=false 并移出列表（别让死人留在朝廷里）
+---     ② 按新 leader 造一份角色（五维来自 leader 的 admin/diplo/military）
+---     ③ 回写 f.leaderId 指向新角色
+---   容错：CharacterSystem 未初始化 / 没开人物系统 → 静默跳过（不阻断继位）。
+---@param gameState table
+---@param factionId number
+function LeaderSystem._syncHeirToCharacters(gameState, factionId)
+    local ok, CharacterSystem = pcall(require, "systems.CharacterSystem")
+    if not ok or not CharacterSystem then return end
+    local f = gameState and gameState.factions and gameState.factions[factionId]
+    if not f or not f.leader then return end
+
+    -- ① 旧君主角色：标记死亡 + 移出列表
+    if f.leaderId then
+        local list = f.characters
+        if list then
+            for i = #list, 1, -1 do
+                if list[i].id == f.leaderId then
+                    list[i].alive = false
+                    list[i].post = nil
+                    table.remove(list, i)
+                    break
+                end
+            end
+        end
+        f.leaderId = nil
+    end
+
+    -- ② 新君角色（五维口径与 ensureInit 里保持一致）
+    local l = f.leader
+    local newId = CharacterSystem._nextId or 1
+    CharacterSystem._nextId = newId + 1
+    local heir = {
+        id = newId,
+        name = l.name,
+        titleFrom = "国君",
+        age = l.age or 25,
+        gender = "男",
+        diplomacy  = l.diplo or 3,
+        military   = l.military or 3,
+        management = l.admin or 3,
+        intrigue   = math.random(2, 4),
+        learning   = math.random(2, 4),
+        loyalty = 100,
+        factionId = factionId,
+        post = "君主",
+        alive = true,
+    }
+    l.intrigue = heir.intrigue
+    l.learning = heir.learning
+    local okT, Traits = pcall(require, "data.Traits")
+    if okT and Traits then
+        Traits.roll(heir, 2)
+        Traits.applyAttrs(heir)
+    end
+    f.characters = f.characters or {}
+    f.characters[#f.characters + 1] = heir
+    -- ③ 回写关联 id
+    f.leaderId = newId
+end
+
 --- 按年龄计算每年死亡概率
 ---@param age number
 ---@return number
@@ -113,6 +203,11 @@ local function deathChance(age)
     if age >= 60 then return 0.15 end
     if age >= 50 then return 0.08 end
     if age >= 40 then return 0.03 end
+    -- 幼主保护（2026-09-29）：未成年君主**死亡概率减半**
+    --   为什么：实测出现"Y117→123→129 连续三个幼主继位"——幼主在位几年就死，
+    --   下一任更小，恶性循环。史实上幼主也常有摄政庇护，这里用概率体现。
+    --   （真正的摄政系统以后再做；先保证王朝不会在几代幼主里断掉）
+    if age < 16 then return 0.005 end
     return 0.01
 end
 
@@ -166,10 +261,40 @@ function LeaderSystem.processYear(gameState)
 
         if math.random() < deathChance(leader.age) then
             local oldName = leader.name
-            f.leader = generateHeir(fid)
+            -- ⚠️ 顺序很关键（2026-09-29 踩过坑）：
+            --   inheritanceOrder 是**通过 f.leaderId 找君主的**，一旦把旧君主移出
+            --   角色表，getById 就返回 nil → 算出来是空顺序 → 又退化成空降陌生人。
+            --   所以必须**先算继承人，再移走旧君主**。
+            local CS = require("systems.CharacterSystem")
+            local oldChar = f.leaderId and CS.getById(gameState, f.leaderId)
+            local heirChar = CS.inheritanceOrder(gameState, fid)[1]
+
+            -- ① 旧君主标记死亡并移出角色表
+            if oldChar then oldChar.alive = false end
+            LeaderSystem._removeRulerFromCharacters(gameState, fid)
+
+            -- ② 血缘继承：把王位给**刚才算好的**第一顺位
+            --   ⚠️ 必须把 heirChar 传进去：此刻旧君主已移出角色表，
+            --     applySuccession 内部重算会拿不到君主 → 顺序为空 → 白算一场。
+            local heirName, bloodline = nil, ""
+            if heirChar then
+                CS.applySuccession(gameState, fid, heirChar)
+                heirName = heirChar.name
+                if oldChar and heirChar.parentId == oldChar.id then
+                    bloodline = "（先君子嗣）"
+                end
+            end
+
+            -- ③ 兜底：没有血缘继承人（新势力/开局就绝嗣）→ 空降
+            if not heirName then
+                f.leader = generateHeir(fid)
+                LeaderSystem._syncHeirToCharacters(gameState, fid)
+                heirName = f.leader.name
+            end
+
             gameState.addMessage(
                 factionName(gameState, fid) .. "君主 " .. oldName
-                .. " 薨逝，新君 " .. f.leader.name .. " 继位", "system")
+                .. " 薨逝，新君 " .. tostring(heirName) .. " 继位" .. bloodline, "system")
         end
         ::continueLeader::
     end

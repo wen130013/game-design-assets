@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<scene id="1">
+	<attribute name="Name" value="" />
+	<attribute name="Time Scale" value="1" />
+	<attribute name="Smoothing Constant" value="50" />
+	<attribute name="Snap Threshold" value="5" />
+	<attribute name="Elapsed Time" value="0" />
+	<attribute name="Next Replicated Node ID" value="2" />
+	<attribute name="Next Replicated Component ID" value="1" />
+	<attribute name="Next Local Node ID" value="16777216" />
+	<attribute name="Next Local Component ID" value="16777218" />
+	<attribute name="Variables" />
+	<attribute name="Variable Names" value="" />
+	<component type="Octree" id="16777216">
+		<attribute name="Bounding Box Min" value="-63.00 -63.00 -63.00" />
+		<attribute name="Bounding Box Max" value="63.00 63.00 63.00" />
+	</component>
+	<component type="WorldPartitionComponent" id="16777217">
+		<attribute name="World Data Path" value="uuid://C5iY4WE96qsI8YHtVfGFwD97" />
+	</component>
+</scene>

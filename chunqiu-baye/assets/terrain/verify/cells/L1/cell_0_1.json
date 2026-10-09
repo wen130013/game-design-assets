@@ -1,0 +1,29 @@
+{
+	"cellCoord": [
+		0,
+		1
+	],
+	"worldBounds": {
+		"min": [
+			0.0,
+			-1000.0,
+			81.91999816894531
+		],
+		"max": [
+			81.91999816894531,
+			1000.0,
+			163.83999633789063
+		]
+	},
+	"sceneData": "uuid://BFhJocQ6woRwe520aa-H3Owm",
+	"resources": [
+		{
+			"type": "Model",
+			"name": "uuid://Fn6gQWbWtBfsyie7yNx69ygU"
+		},
+		{
+			"type": "Material",
+			"name": "uuid://E1FpAUqjSxtSvKuthWlVVMwQ"
+		}
+	]
+}

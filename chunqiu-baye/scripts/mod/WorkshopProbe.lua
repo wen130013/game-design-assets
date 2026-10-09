@@ -148,8 +148,9 @@ local function addLine(logLabel, line)
     logLabel.text = table.concat(lines, "\n")
 end
 
----@param label Label
----@param sv ScrollView
+---@param logLabel Label
+---@param ok boolean
+---@param note string
 local function mark(logLabel, ok, note)
     local prefix = ok and "[PASS]" or "[FAIL]"
     addLine(logLabel, string.format("%s %s", prefix, note))
@@ -197,6 +198,7 @@ local function startTasks(statusLabel, logLabel)
         local cc = clientCloud
         if not cc then cb(logLabel, statusLabel, "T0 环境")(false, "clientCloud 不可用") return end
         local uid = cc.userId
+        ---@diagnostic disable-next-line: undefined-global
         if uid == nil and GetUserId then uid = GetUserId() end
         refs.uid = uid
         local mapN = cc.mapName or "?"
@@ -231,6 +233,7 @@ local function startTasks(statusLabel, logLabel)
 
     -- T2 大小阶梯：每档 set+读回长度，串行推进
     queue("T2 大小阶梯", function()
+        ---@type integer[]
         local sizes = { 1, 2, 4, 8, 16, 32, 64, 128 }
         local idx = 1
         local maxOk = 0
@@ -428,10 +431,10 @@ end
 -- ------------------------------------------------------------------
 --- 入口（安全模式）：挂载方先在 root 就绪后调用 attachRoot，
 --- 按钮 onClick 只调 show()，不在闭包里引用未定义变量。
----@param root Widget UI 根面板（MainMenu.create / ShowMainMenu 返回的 root）
 -- ------------------------------------------------------------------
 local attachedRoot = nil
 
+---@param root Widget UI 根面板（MainMenu.create / ShowMainMenu 返回的 root）
 function M.attachRoot(root)
     attachedRoot = root
     -- 换 root 时丢弃旧弹窗句柄（旧弹窗随旧 root 一起销毁，勿再从新 root 移除）

@@ -1,0 +1,5 @@
+Traceback (most recent call last):
+  File "/workspace/move_fillgaps.py", line 7, in <module>
+    start = src.index(start_marker)
+            ^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: substring not found

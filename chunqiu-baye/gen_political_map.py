@@ -57,6 +57,24 @@ def load_wasteland():
     return waste
 
 
+# 边缘出血：每块瓦片向外多带 PAD 源像素（与 MapRenderer.TILE_PAD 必须一致），
+# 消除缩小时瓦片接缝处的横竖细线。
+PAD = 4
+
+
+def paste_tile_padded(img, x0, y0, size, out_path, fill):
+    """切出 [x0,x0+size)² 并外扩 PAD 像素出血边，保存为 (size+2*PAD)²。越界处填 fill。"""
+    w, h = img.size
+    canvas = Image.new("RGB", (size + PAD * 2, size + PAD * 2), fill)
+    sx0, sy0 = x0 - PAD, y0 - PAD
+    cx0, cy0 = max(sx0, 0), max(sy0, 0)
+    cx1, cy1 = min(sx0 + size + PAD * 2, w), min(sy0 + size + PAD * 2, h)
+    if cx0 < cx1 and cy0 < cy1:
+        canvas.paste(img.crop((cx0, cy0, cx1, cy1)), (cx0 - sx0, cy0 - sy0))
+    canvas.save(out_path, optimize=True)
+
+
+
 def main():
     factions = load_factions()
     waste = load_wasteland()
@@ -109,7 +127,33 @@ def main():
     kD = np.roll(gb_px, -1, axis=0)
     kD[-1, :] = -1
     diffD = (gb_px != kD) & (gb_px >= 0) & (kD >= 0)
-    border = diffR | diffD
+
+    # 2026-09-13（F0 症状②）：边界改成"跨边界对称 2px"——一对像素两侧各画 1px。
+    #
+    # 为什么：diffR/diffD 标记的是这一对里**低索引**的那一颗（左/上），所以原来的
+    # 1px 黑带中心在 (i+0.5)，而真实边界（像素角）在 i+1 → 系统性偏 0.5px。
+    # 运行时的矢量省界环正是按"像素角"生成的（gen_province_rings.py），
+    # 于是金色的国境描边永远压在黑带旁边（放大后肉眼可见）。
+    # 两侧各画 1px 后黑带中心 == 真实边界 == 矢量线，天然对齐、不再需要偏移 hack。
+    #
+    # ⚠️ 只能沿边界方向扩展：竖边界往右补一颗、横边界往下补一颗；
+    #    若不分方向地"向右+向下"扩张，会把横边界的每一颗都向右糊一格 → 线变粗一圈。
+    def _shift_right(m):
+        out = np.roll(m, 1, axis=1)
+        out[:, 0] = False
+        return out
+
+    def _shift_down(m):
+        out = np.roll(m, 1, axis=0)
+        out[0, :] = False
+        return out
+
+    border = diffR | _shift_right(diffR) | diffD | _shift_down(diffD)
+
+    # 海岸线：**当前是死代码**（保留原样，不在本次改动范围）。
+    # gb_px 里海洋 = -1，而 diffR/diffD 要求两侧都 >= 0，所以这里的条件永远不成立
+    # → 底图实际没有画海岸线，海陆交界只是纯色切换。若以后要加海岸线，
+    # 需要单独按 is_sea 与陆地 id 比较来取边界（并同样是"跨边界对称"）。
     coast = (border & diffR & ((is_sea & (kR > 0)) | ((~is_sea) & (kR == -1)))) \
           | (border & diffD & ((is_sea & (kD > 0)) | ((~is_sea) & (kD == -1))))
     land_border = border & (~coast)
@@ -120,22 +164,17 @@ def main():
     Image.fromarray(color_arr, "RGB").save(out, optimize=True)
     print(f"[Political] 已写势力版图 {out}")
 
-    # 瓦片
+    # 瓦片（带边缘出血 PAD，消除缩小时接缝；文件名 map_TX_TY.png）
     os.makedirs(TILE_DIR, exist_ok=True)
     TILE = 1024
+    out_img = Image.fromarray(color_arr)
     n = 0
     for ty in range(0, H, TILE):
         for tx in range(0, W, TILE):
-            box = (tx, ty, min(tx + TILE, W), min(ty + TILE, H))
-            tile = Image.fromarray(color_arr).crop(box)
-            if tile.size != (TILE, TILE):
-                full = Image.new("RGB", (TILE, TILE), SEA)
-                full.paste(tile, (0, 0))
-                tile = full
             name = os.path.join(TILE_DIR, f"map_{tx // TILE}_{ty // TILE}.png")
-            tile.save(name, optimize=True)
+            paste_tile_padded(out_img, tx, ty, TILE, name, SEA)
             n += 1
-    print(f"[Political] 瓦片 {n} 张 → {TILE_DIR}")
+    print(f"[Political] 瓦片 {n} 张（出血 {PAD}px）→ {TILE_DIR}")
 
 
 if __name__ == "__main__":

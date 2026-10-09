@@ -1,0 +1,53 @@
+{
+	"grids": [
+		{
+			"level": 0,
+			"cellSize": 40.959999084472659,
+			"loadingRange": 100.0,
+			"unloadMargin": 30.0,
+			"cells": [
+				"uuid://EE3_CauuCexuw3e5PLjtFRUk",
+				"uuid://FtcSCWDQecpiTY0LyUgjl71v",
+				"uuid://GHz3sS6x-Q8aJbDCufvweWrK",
+				"uuid://HRBhafrZDPq1bKo4x5EucslH",
+				"uuid://AEUE8bmblNXSHsZUNlC1nF7y",
+				"uuid://AdmKybkvhnSv1JdqAuvYbKxh",
+				"uuid://DGKlUUGevDx_eG41Fzcs5Hlb",
+				"uuid://Dmpo6QYghtejpMdFUy8gNi68",
+				"uuid://FiZiYbQ1WdfX8S7VmmC-rZ7Z"
+			]
+		},
+		{
+			"level": 1,
+			"cellSize": 81.91999816894531,
+			"loadingRange": 250.0,
+			"unloadMargin": 30.0,
+			"cells": [
+				"uuid://CKGIMdhzqpDq8Ap9DkrrTil9",
+				"uuid://ATjAQdvw-FT_zoArI_1Cs1zo",
+				"uuid://E_T6aX_lWC82hNZ21PwVBZdu",
+				"uuid://BzVJYezxdz_qIBVOQXk6Vlq6"
+			]
+		},
+		{
+			"level": 2,
+			"cellSize": 163.83999633789063,
+			"loadingRange": 500.0,
+			"unloadMargin": 30.0,
+			"cells": [
+				"uuid://HdOqsRq7YiUP0uOOXcjC3HUl"
+			]
+		}
+	],
+	"streamingLayers": [
+		{
+			"name": "decoration",
+			"cellSize": 128.0,
+			"loadingRange": 300.0,
+			"unloadMargin": 30.0,
+			"cells": [
+				"uuid://F9FSgaPxpyQ1EdFqEtbOsyNF"
+			]
+		}
+	]
+}

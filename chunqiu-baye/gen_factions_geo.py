@@ -323,12 +323,14 @@ def main():
                 best_d = d
                 best = p
         pids = ','.join(str(p[0]) for p in plist)
+        # 2026-09-17 兵力 ÷5（用户："别的游戏军队的数量都非常非常少，为什么这里是好几千"）
+        #   照 AoH3/EU4 的量级：一支常备军几百人，后期也不会滚成天文数字
         if fid <= 15:
-            army, gold, food = 2500, 150, 120      # 诸侯大国
+            army, gold, food = 500, 150, 120       # 诸侯大国
         elif fid <= 23:
-            army, gold, food = 2000, 80, 70        # 北方游牧
+            army, gold, food = 400, 80, 70         # 北方游牧
         else:
-            army, gold, food = 1500, 60, 50        # 周边蛮族（百越/巴蜀等）
+            army, gold, food = 300, 60, 50         # 周边蛮族（百越/巴蜀等）
         lines.append('{id=' + str(fid)
                      + ',name="' + fname + '"'
                      + ',fullName="' + full + '"'

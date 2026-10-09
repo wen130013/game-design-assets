@@ -1,0 +1,77 @@
+{
+	"cellCoord": [
+		0,
+		0
+	],
+	"worldBounds": {
+		"min": [
+			0.0,
+			0.0,
+			0.0
+		],
+		"max": [
+			128.0,
+			8.960002899169922,
+			128.0
+		]
+	},
+	"sceneData": "uuid://DPpQwY08UAAgznT1X1PokI-C",
+	"resources": [
+		{
+			"type": "Model",
+			"name": "uuid://FkkgCW7_obqigXDuG9EWK317"
+		},
+		{
+			"type": "Material",
+			"name": "uuid://By4uuXgzYLA-hKBZkTt_X5KB"
+		},
+		{
+			"type": "Model",
+			"name": "uuid://CcnXsezZQ0_RBhXwVwBWaOSc"
+		},
+		{
+			"type": "Material",
+			"name": "uuid://FvXVKSr7pB866H8ZCv_DOFoR"
+		},
+		{
+			"type": "Material",
+			"name": "uuid://GszcOVIRiOCebqZFyCUIt3By"
+		},
+		{
+			"type": "Material",
+			"name": "uuid://AvsMScuEz10qAy1xXq5O4XIz"
+		},
+		{
+			"type": "Material",
+			"name": "uuid://CRG4qZHRCQb18CUkIIy1WniW"
+		},
+		{
+			"type": "Model",
+			"name": "uuid://AcLHQW1bEgjBJVqtCaskp1ib"
+		},
+		{
+			"type": "Model",
+			"name": "uuid://HCtJyTHA6dNeAwYCymcrUuJc"
+		},
+		{
+			"type": "Model",
+			"name": "uuid://CMXDufJcmaLit7JHd0fbyEJ5"
+		},
+		{
+			"type": "Material",
+			"name": "uuid://BPq5gS6b45uKl5ltzlRifWNx"
+		},
+		{
+			"type": "Model",
+			"name": "uuid://GJuFSUY7942M9TBDul9TlTHX"
+		},
+		{
+			"type": "Model",
+			"name": "uuid://DWhvKdSekpXF85ZhPhhbXboZ"
+		},
+		{
+			"type": "Model",
+			"name": "uuid://EN4CeVsACGCV9n6YXOrik-NK"
+		}
+	]
+}

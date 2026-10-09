@@ -1,22 +1,10 @@
--- ============================================================================
--- 春秋霸业 - 战争系统（战争分数 / 投降 / 割地赔款）
--- WarSystem.lua
---
--- 管理"进行中的战争"记录与战争分数：
---   * 宣战时在 gameState.wars 创建记录（记录双方初始省份数）
---   * 战争分数 = 已占领对方初始省的比例（0~100）
---   * 求和时按战争分数决定接受概率与割地/赔款结果
--- 参照 Age of History 3 / CK3 的战争分数机制。
--- ============================================================================
-
+-- 战争分数：每场战争独立记录领土、首都与兵力快照。
+-- 借鉴公开规则的规模权重和贡献上限，公式由本项目独立实现。
 local WarSystem = {}
-
--- =========================================================================
--- 常量
--- =========================================================================
-local BASE_PEACE_CHANCE = 0.5   -- 无优势时的基础求和接受概率
-local SCORE_FACTOR      = 0.6   -- 分数每高对方 10 分，接受概率增加 6%
-local WAR_SCORE_CAP     = 100
+local BASE_PEACE_CHANCE = 0.5
+local SCORE_FACTOR = 0.006   -- 分差每 10 分，接受概率增加 6%
+local WAR_SCORE_CAP = 100
+local PROV_SCORE, CAPITAL_SCORE, BATTLE_CAP = 60, 20, 20
 
 -- =========================================================================
 -- 内部工具
@@ -30,16 +18,19 @@ local function warKey(f1, f2)
     return math.min(f1, f2) .. "_" .. math.max(f1, f2)
 end
 
---- 计算一个势力当前拥有的省份数
+--- 当前有效领土，连续数组便于存档，不采用整局初始归属。
 ---@param gameState table
 ---@param factionId number
----@return number
-local function provinceCount(gameState, factionId)
-    if gameState.factionProvinces and gameState.factionProvinces[factionId] then
-        return #gameState.factionProvinces[factionId]
+---@return number[]
+local function provinceIds(gameState, factionId)
+    local ids = {}
+    for pid, p in pairs(gameState.provinces or {}) do
+        if p.ownerId == factionId and not p.isOcean and not p.isWasteland then
+            ids[#ids + 1] = pid
+        end
     end
-    local f = gameState.factions[factionId]
-    return f and #f.provinces or 0
+    table.sort(ids)
+    return ids
 end
 
 --- 取势力名称（容错）
@@ -62,12 +53,30 @@ end
 function WarSystem.startWar(gameState, attackerId, defenderId)
     gameState.wars = gameState.wars or {}
     local key = warKey(attackerId, defenderId)
+    -- 开战时刻（year*12+month）—— 战争列表按它排序：**越早开战的越靠右**（2026-09-17 用户口径）
+    local startedAt = nil
+    local ok, TimeSystem = pcall(require, "core.TimeSystem")
+    if ok and TimeSystem and TimeSystem.getTime then
+        local y, m = TimeSystem.getTime()
+        if type(y) == "number" then
+            startedAt = y * 12 + (tonumber(m) or 1)
+        end
+    end
+    local aIds, dIds = provinceIds(gameState, attackerId), provinceIds(gameState, defenderId)
+    local a, d = gameState.factions[attackerId], gameState.factions[defenderId]
+    local Ledger = require("systems.MilitaryLedger")
+    local _, aArmy = Ledger.snapshot(gameState, a)
+    local _, dArmy = Ledger.snapshot(gameState, d)
     gameState.wars[key] = {
-        aId        = attackerId,
-        dId        = defenderId,
-        aProvinces = provinceCount(gameState, attackerId),   -- 宣战时的初始省份数
-        dProvinces = provinceCount(gameState, defenderId),
+        aId = attackerId, dId = defenderId,
+        aProvinces = #aIds, dProvinces = #dIds,
+        aProvinceIds = aIds, dProvinceIds = dIds,
+        aCapitalId = a and a.capitalId, dCapitalId = d and d.capitalId,
+        aArmy = aArmy, dArmy = dArmy,
+        startedAt = startedAt,
     }
+    print(string.format("[War] 宣战 %s 对 %s，快照省数%d/%d，兵力%.0f/%.0f",
+        tostring(attackerId), tostring(defenderId), #aIds, #dIds, aArmy, dArmy))
     return gameState.wars[key]
 end
 
@@ -107,47 +116,132 @@ function WarSystem.getWarsFor(gameState, factionId)
     return result
 end
 
---- 计算一场战争中一方的战争分数（0~100）
---- 分数 = 已占领对方初始省的比例（2026-09-01：基于 occupiedBy 标记）
+--- 势力首都省 id（容错：没这个字段就返回 nil）
+---@param gameState table
+---@param factionId number
+---@return number|nil
+local function capitalOf(gameState, factionId)
+    local f = gameState.factions[factionId]
+    return f and f.capitalId or nil
+end
+
+--- 计算一场战争中一方的战争分数（−100 ~ +100）
+---
+--- 构成（2026-09-18 用户口径："占领/战斗/目标 加分，丢省/战败/失都 减分"）：
+---   * 领土（实时）：占领对方省 + / 丢自己的省 −（按宣战时初始省数归一，合计 ±PROV_SCORE）
+---   * 目标（实时）：占领对方首都 +CAPITAL_SCORE / 自己失都 −CAPITAL_SCORE
+---   * 战斗（累积）：按败方参战规模占其开战兵力比例计分，净贡献夹±20。
+---   * 全境控制且本土未失：决定性±100，无需刷小仗补差额。
 ---@param gameState table
 ---@param war table
 ---@param factionId number 想要哪一方的分数
 ---@return number score
 function WarSystem.getScore(gameState, war, factionId)
-    local isA = (war.aId == factionId)
+    if not war or (factionId ~= war.aId and factionId ~= war.dId) then return 0 end
+    local isA = war.aId == factionId
     local enemyId = isA and war.dId or war.aId
-    local enemyTotal = isA and war.dProvinces or war.aProvinces
-    if enemyTotal <= 0 then return WAR_SCORE_CAP end
-    -- 我方占领的"敌方初始省"数量
-    local gained = 0
-    for pid, prov in pairs(gameState.provinces) do
-        if prov.occupiedBy == factionId and prov._initOwner == enemyId then
-            gained = gained + 1
+    -- 老存档没有历史快照，只按当前正式领土回退；不伪造整局初始归属。
+    local myIds = (isA and war.aProvinceIds or war.dProvinceIds) or provinceIds(gameState, factionId)
+    local enemyIds = (isA and war.dProvinceIds or war.aProvinceIds) or provinceIds(gameState, enemyId)
+    local function occupied(ids, by)
+        local n = 0
+        for _, pid in ipairs(ids) do
+            local p = gameState.provinces[pid]
+            if p and (p.occupiedBy or p.ownerId) == by then n = n + 1 end
         end
+        return n
     end
-    return math.min(WAR_SCORE_CAP, gained / enemyTotal * WAR_SCORE_CAP)
+    local gained, lost = occupied(enemyIds, factionId), occupied(myIds, enemyId)
+    -- 全境控制即决定性胜负，无需靠四场小仗补满剩下的20分。
+    if #enemyIds > 0 and gained == #enemyIds and lost == 0 then return WAR_SCORE_CAP end
+    if #myIds > 0 and lost == #myIds and gained == 0 then return -WAR_SCORE_CAP end
+    local up = #enemyIds > 0 and gained / #enemyIds * PROV_SCORE or 0
+    local down = #myIds > 0 and lost / #myIds * PROV_SCORE or 0
+    local myCap = (isA and war.aCapitalId or war.dCapitalId) or capitalOf(gameState, factionId)
+    local enemyCap = (isA and war.dCapitalId or war.aCapitalId) or capitalOf(gameState, enemyId)
+    local myP, enemyP = myCap and gameState.provinces[myCap], enemyCap and gameState.provinces[enemyCap]
+    local capitalScore = (enemyP and (enemyP.occupiedBy or enemyP.ownerId) == factionId and CAPITAL_SCORE or 0)
+        - (myP and (myP.occupiedBy or myP.ownerId) == enemyId and CAPITAL_SCORE or 0)
+    local battleScore = math.max(-BATTLE_CAP, math.min(BATTLE_CAP, war.aBattle or -(war.dBattle or 0)))
+    local signedBattle = isA and battleScore or -battleScore
+    return math.max(-WAR_SCORE_CAP, math.min(WAR_SCORE_CAP, up - down + capitalScore + signedBattle))
 end
 
---- 某省在和平条约中的战争分数成本（2026-09-01）
----   * 已被索取方占领的省：便宜（5 分）
----   * 未被占领的省：贵（15 分，需强取）
+--- 一场胜仗按败方参战人数/其宣战时兵力加分，主力战最多20，小仗不再固定5分。
+--- 旧调用/旧战斗缺少规模时不猜历史，计0分；占领分仍照常实时计算。
+---@param gameState table
+---@param winnerId number|nil
+---@param loserId number|nil
+---@param loserInitialSize number|nil
+---@return number points
+function WarSystem.recordBattle(gameState, winnerId, loserId, loserInitialSize)
+    if not winnerId or not loserId then return 0 end
+    local war = WarSystem.findWar(gameState, winnerId, loserId)
+    if not war then return 0 end
+    local armyAtStart = loserId == war.aId and war.aArmy or war.dArmy
+    if not armyAtStart or armyAtStart <= 0 then
+        local f = gameState.factions[loserId]
+        armyAtStart = f and f.armySize or 0
+    end
+    local participants = math.max(0, loserInitialSize or 0)
+    local denominator = math.max(1, armyAtStart or 0, participants)
+    local points = BATTLE_CAP * participants / denominator
+    local old = war.aBattle or -(war.dBattle or 0)
+    local signed = winnerId == war.aId and points or -points
+    war.aBattle = math.max(-BATTLE_CAP, math.min(BATTLE_CAP, old + signed))
+    war.dBattle = -war.aBattle
+    return points
+end
+
+--- 日伤亡、追击和无退路全歼共用统计，战报不再漏记战后损失。
+---@param gameState table
+---@param attackerId number
+---@param defenderId number
+---@param attLoss number
+---@param defLoss number
+function WarSystem.recordCasualties(gameState, attackerId, defenderId, attLoss, defLoss)
+    local war = WarSystem.findWar(gameState, attackerId, defenderId)
+    if not war then return end
+    local aLost, dLost = math.max(0, attLoss or 0), math.max(0, defLoss or 0)
+    local attIsA = attackerId == war.aId
+    war.aLoss = (war.aLoss or 0) + (attIsA and aLost or dLost)
+    war.dLoss = (war.dLoss or 0) + (attIsA and dLost or aLost)
+    war.stats = war.stats or {}
+    local function add(fid, side, lost, killed)
+        local record = war.stats[fid] or { lost = 0, killed = 0 }
+        record.side = side
+        record.lost = (record.lost or 0) + lost
+        record.killed = (record.killed or 0) + killed
+        war.stats[fid] = record
+    end
+    add(attackerId, attIsA and "a" or "d", aLost, dLost)
+    add(defenderId, attIsA and "d" or "a", dLost, aLost)
+end
+
+--- 割地成本与该省的占领收益使用同一规模口径，避免大国占一省却永远不够5分。
+--- 已占：取5分和该省领土收益一半的较小值；未占：三倍，强取仍更贵。
 ---@param gameState table
 ---@param provinceId number
----@param claimantId number 索取方
+---@param claimantId number
 ---@return number cost
 function WarSystem.getProvinceCost(gameState, provinceId, claimantId)
     local prov = gameState.provinces[provinceId]
     if not prov or prov.isWasteland or prov.isOcean then return 0 end
-    if prov.occupiedBy == claimantId then
-        return 5
+    local total = #provinceIds(gameState, prov.ownerId)
+    local war = prov.ownerId and WarSystem.findWar(gameState, claimantId, prov.ownerId)
+    if war then
+        local ids = prov.ownerId == war.aId and war.aProvinceIds or war.dProvinceIds
+        if ids and #ids > 0 then total = #ids end
     end
-    return 15
+    local occupiedCost = math.min(5, PROV_SCORE / math.max(1, total) * 0.5)
+    return occupiedCost * (prov.occupiedBy == claimantId and 1 or 3)
 end
 
---- 生成和平条约条款（2026-08-31）
+--- 生成和平条约条款（2026-08-31；2026-09-25 修注释）
 ---
---- 机制说明：本游戏"占领即吞并"（occupy 直接转移所有权），
---- 所以领土战果已是现状；条约只包含**赔款**：
+--- ⚠️ 旧注释写的是"本游戏占领即吞并（occupy 直接转移所有权）"——**那是 bug 不是设计**。
+---   2026-09-25 已修正：打下来只是**军事占领**（occupiedBy），和约里才正式割让。
+---   条约内容 = **赔款** + 割让已占省（后者在 DiplomacySystem.settlePeace 里处理）：
 ---   * 求和方占优（分数更高）→ 被求和方向求和方赔款
 ---   * 求和方劣势               → 求和方向被求和方赔款
 --- 赔款额 = (10 + 分数差 * 1.5) * 10，封顶 5000
@@ -186,6 +280,11 @@ function WarSystem.getPeaceAcceptChance(gameState, proposerId, targetId)
 
     -- 接受概率 = 基础 50% + 分数差修正
     -- proposer 分数越高（正在赢），target 越愿意接受
+    local claimant = gameState.factions[proposerId]
+    local conceder = gameState.factions[targetId]
+    if myScore >= 99.999 then return 1 end
+    if myScore >= 50 and claimant and conceder and (claimant.armySize or 0) > 0
+        and (conceder.armySize or 0) <= (claimant.armySize or 0) * 0.35 then return 1 end
     local diff = myScore - enemyScore
     local chance = BASE_PEACE_CHANCE + diff * SCORE_FACTOR
     return math.max(0.1, math.min(0.95, chance))
@@ -217,7 +316,7 @@ function WarSystem.proposePeace(gameState, proposerId, targetId)
     if not terms then
         return false, "无法生成条款"
     end
-    WarSystem.endWar(gameState, war)
+    -- 仅返回判定和条款；关系、军队、领土必须由外交结算一次性收尾。
     return true, terms
 end
 

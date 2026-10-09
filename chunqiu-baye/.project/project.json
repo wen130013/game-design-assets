@@ -1,0 +1,33 @@
+{
+  "project_id": "p_rnjd",
+  "version": "1.0.27",
+  "author": {
+    "id": "622097873"
+  },
+  "taptap_publish": {
+    "title": "春秋霸业",
+    "description": "<game description>",
+    "category": "strategy",
+    "screen_orientation": "landscape",
+    "collection_type": "sce",
+    "trial_note": "<developer's note>",
+    "app_platforms": "1,2",
+    "developer_id": 386781,
+    "app_id": 843632,
+    "miniapp_id": "tapmccroiamfgrgtof"
+  },
+  "assets": {
+    "icon": "",
+    "screenshots": [],
+    "promotional_image": ""
+  },
+  "test_qrcode": {
+    "url": "https://tapcode-sce.spark.xd.com/qrcode/p_rnjd_1789988034732.png",
+    "generated_at": "2026-09-21T10:53:54.931Z"
+  },
+  "$schema": "../schemas/project.schema.json",
+  "entry": "main.lua",
+  "metadata": {
+    "updated_at": "2026-09-21T10:53:54.931Z"
+  }
+}

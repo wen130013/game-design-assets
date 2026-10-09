@@ -1,0 +1,41 @@
+{
+	"cellCoord": [
+		0,
+		0
+	],
+	"worldBounds": {
+		"min": [
+			0.0,
+			-10.0,
+			0.0
+		],
+		"max": [
+			38.39999771118164,
+			17.680002212524415,
+			38.39999771118164
+		]
+	},
+	"sceneData": "uuid://CRZ4mcJ0sVoN7h-ak6GpYipc",
+	"resources": [
+		{
+			"type": "TileChunkData",
+			"name": "uuid://DJ3OGe_M3j8PNf5FJesfaQ7c"
+		},
+		{
+			"type": "Model",
+			"name": "uuid://CtzFwWlvDYXpuI2lq7rHd38r"
+		},
+		{
+			"type": "Model",
+			"name": "uuid://AyBfSTf8lU8Pxig0Zpn24RnE"
+		},
+		{
+			"type": "Model",
+			"name": "uuid://HHJ-mScGbdBIFhosfh2QXudL"
+		},
+		{
+			"type": "Model",
+			"name": "uuid://F2ShGcH_MN1v9JCE3Np7rvU7"
+		}
+	]
+}

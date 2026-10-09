@@ -10,14 +10,22 @@ local MapPack = require("data.MapPack")
 local Geography = {}
 
 ------------------------------------------------------------------------
--- Map dimensions（委托当前地图包：eu4=2820×1920 / legacy=10800×6864）
+-- Map dimensions（**活引用**，不是拷贝！）
 ------------------------------------------------------------------------
-Geography.MAP_W = MapPack.MAP_W
-Geography.MAP_H = MapPack.MAP_H
-Geography.BITMAP_W = MapPack.BITMAP_W
-Geography.BITMAP_H = MapPack.BITMAP_H
-Geography.BITMAP_SCALE = MapPack.BITMAP_SCALE
-Geography.BITMAP_PATH = MapPack.BITMAP_PATH
+-- 🔴 2026-09-15 修：原来这 6 行是**值拷贝**：
+--      Geography.MAP_W = MapPack.MAP_W   ← require 时执行一次，此后永不更新
+--    而 main.lua 是先 require（此时还是默认包 eu4）**再**在 Start() 里
+--    MapPack.setActive("world") —— 于是切包之后 Geography 全是旧值，
+--    而**渲染、相机钳制、点击命中全读 Geography** →
+--      ① 9600 宽的图被塞进 5640 的矩形（横向压扁 41%）
+--      ② 点击按老坐标查新位图 → 命中错位（"点不中/点错"）
+--
+--    改成元表**现取**：Geography 自己的字段（zones / factionCapitals / 函数…）优先，
+--    没有的字段自动去 MapPack 取。**一处改动，全工程所有 `Geography.XXX` 自动跟着包走。**
+--    （这也是唯一能保证"不漏改"的做法 —— 散落各处的引用没法靠人去数清楚。）
+setmetatable(Geography, {
+    __index = function(_, k) return MapPack[k] end,
+})
 
 ------------------------------------------------------------------------
 -- Helper: convert lon/lat to map x/y（委托当前地图包投影）
@@ -419,6 +427,11 @@ Geography.terrainStats = {
     ["沼泽"] = { goldMin = 1, goldMax = 3,  foodMin = 2, foodMax = 5,  popMin = 1000,  popMax = 3000  },
     ["盆地"] = { goldMin = 3, goldMax = 6,  foodMin = 4, foodMax = 7,  popMin = 3000,  popMax = 8000  },
     ["沙漠"] = { goldMin = 1, goldMax = 2,  foodMin = 1, foodMax = 2,  popMin = 500,   popMax = 2000  },
+    -- 2026-09-22 真实地理地形接入后新增（gen_terrain.py / TerrainReal.lua 会产出这些名字）
+    ["农田"]  = { goldMin = 5, goldMax = 10, foodMin = 6, foodMax = 11, popMin = 6000, popMax = 15000 },
+    ["针叶林"] = { goldMin = 1, goldMax = 3,  foodMin = 2, foodMax = 4,  popMin = 1000, popMax = 3000  },
+    ["丛林"]  = { goldMin = 2, goldMax = 4,  foodMin = 3, foodMax = 6,  popMin = 2000, popMax = 6000  },
+    ["冻土"]  = { goldMin = 1, goldMax = 2,  foodMin = 1, foodMax = 2,  popMin = 500,  popMax = 1500  },
 }
 
 ------------------------------------------------------------------------

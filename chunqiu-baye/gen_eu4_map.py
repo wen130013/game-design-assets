@@ -17,6 +17,7 @@
        scripts/data/mappacks/eu4/Provinces_N.lua 省份数据分片
 依赖：pip install pillow numpy
 """
+import argparse
 import colorsys
 import math
 import os
@@ -29,10 +30,56 @@ from PIL import Image, ImageDraw
 ROOT = os.path.dirname(os.path.abspath(__file__))
 SVG_PATH = os.path.join(ROOT, 'data', 'eu4', 'eu4_provinces.svg')
 
-# 输出目录
-ASSET_DIR = os.path.join(ROOT, 'assets', 'image', 'eu4')
-TILE_DIR = os.path.join(ASSET_DIR, 'tiles')
-DATA_DIR = os.path.join(ROOT, 'scripts', 'data', 'mappacks', 'eu4')
+# ---------------------------------------------------------------------------
+# 地图包参数（2026-09-15 参数化：一份脚本出两个包）
+#
+#   python3 gen_eu4_map.py                              → eu4（旧大陆，裁剪欧亚非）**行为和以前完全一致**
+#   python3 gen_eu4_map.py --pack world --crop 0 --keep-oceania --name 新世界
+#                                                       → world（新世界，全球 360°）
+#
+# 为什么能共用一份脚本：源 SVG 本来就是**全球**的（x=0..1200 ↔ lon=-180..180），
+# 当初只是把 x<495 的部分裁掉了（CROP_X0）。改 CROP_X0 = 0 就是全球图。
+# 而且投影的 x 是**纯线性**（减常数 + 乘常数），y 完全不变 ——
+# 所以去掉裁剪后，已有省份只是整体平移 +CROP_X0*SCALE，**形状一个像素都不变**。
+# ---------------------------------------------------------------------------
+PACK_ID      = 'eu4'          # 包 id（= 输出目录名 = 运行时 require 的末段）
+PACK_NAME    = 'EU4 欧亚非'    # 显示名（写进生成的 .lua）
+PACK_DESC    = '基于欧陆风云4省份划分的欧亚非地图'
+PACK_PLAYSET = None           # 仅用于生成注释，可不填
+CROP_X0      = 495.0          # 裁剪起点（SVG 单位）。0 = 不裁（全球）
+KEEP_OCEANIA = False          # True = 保留大洋洲（澳大利亚/新西兰/太平洋）
+GEN_TILES    = True           # 是否顺带生成分块瓦片（整图就绪时用不到，仅作回退）
+NO_DESERT    = False          # True = 地图上不画沙漠（废土省用无主米色 + 省界全画）
+                              #   2026-09-15 起新世界用：用户拍板"把地图的沙漠取消，
+                              #   但 isWasteland 设定保留"（运行时点击限制等照旧）
+
+# 输出目录（由 configure() 按 PACK_ID 填）
+ASSET_DIR = None
+TILE_DIR = None
+DATA_DIR = None
+
+
+def configure(pack_id, crop_x0, keep_oceania, name=None, desc=None,
+              gen_tiles=True, no_desert=False):
+    """按命令行参数重设全局（模块级常量在函数里按调用时读取，所以直接赋值即可）。"""
+    global PACK_ID, PACK_NAME, PACK_DESC, CROP_X0, KEEP_OCEANIA, GEN_TILES, NO_DESERT
+    global ASSET_DIR, TILE_DIR, DATA_DIR, BITMAP_W, BITMAP_H
+    PACK_ID = pack_id
+    CROP_X0 = float(crop_x0)
+    KEEP_OCEANIA = bool(keep_oceania)
+    GEN_TILES = bool(gen_tiles)
+    NO_DESERT = bool(no_desert)
+    if name: PACK_NAME = name
+    if desc: PACK_DESC = desc
+    ASSET_DIR = os.path.join(ROOT, 'assets', 'image', pack_id)
+    TILE_DIR = os.path.join(ASSET_DIR, 'tiles')
+    DATA_DIR = os.path.join(ROOT, 'scripts', 'data', 'mappacks', pack_id)
+    BITMAP_W = int((SVG_W - CROP_X0) * SCALE)
+    BITMAP_H = int(SVG_H * SCALE)
+    os.makedirs(ASSET_DIR, exist_ok=True)
+    os.makedirs(DATA_DIR, exist_ok=True)
+    print(f'[{PACK_ID}] 参数：裁剪起点 {CROP_X0}，画布 {BITMAP_W}×{BITMAP_H}，'
+          f'保留大洋洲={KEEP_OCEANIA}，生成瓦片={GEN_TILES}，无沙漠={NO_DESERT}')
 
 # ---------------------------------------------------------------------------
 # 地图包几何（欧亚非裁剪后）
@@ -63,6 +110,7 @@ PLAYABLE_REGION = [
 ]
 
 DESERT_RGB = (200, 162, 98)       # 沙漠色（与运行时 isWasteland 渲染一致）
+UNOWNED_RGB = (210, 196, 158)     # 无主米色（与 gen_neutral_tiles.py 的 UNOWNED 同色）
 
 # 可玩区省份中文名映射（EU4 英文名 → 中文，未映射的保留原名）
 NAME_CN = {
@@ -736,7 +784,8 @@ def main():
                 keep.append((pid, subpaths, cx, cy))
             else:
                 drop_reason[pid] = 'america'
-        elif pid in DROP_OCEANIA:
+        elif (not KEEP_OCEANIA) and pid in DROP_OCEANIA:
+            # 全球图（--keep-oceania）不剔大洋洲 —— 澳大利亚/新西兰也是世界的一部分
             drop_reason[pid] = 'oceania'
         else:
             keep.append((pid, subpaths, cx, cy))
@@ -874,7 +923,7 @@ def main():
             return
         path = os.path.join(DATA_DIR, f'Provinces_{chunk_idx}.lua')
         with open(path, 'w', encoding='utf-8') as fh:
-            fh.write('-- 由 gen_eu4_map.py 生成（EU4 欧亚非地图包）\n')
+            fh.write(f'-- 由 gen_eu4_map.py --pack {PACK_ID} 生成（{PACK_NAME}地图包）\n')
             fh.write('return {\n')
             fh.write('\n'.join(chunk))
             fh.write('\n}\n')
@@ -907,7 +956,11 @@ def main():
 
         if not contour:
             continue
-        poly = simplify_poly(contour, eps=1.0)
+        # 可玩区的多边形容差压到 0.3px（2026-09-15）：国境线高亮要"贴着底图黑线走"，
+        # 1.0px 的简化在放大 4 倍时 = 4 屏幕像素的漂移（用户："放大能看见黑边露出来"）；
+        # 外围荒地不参与国境线，保持 1.0（控制数据量）
+        is_waste = not in_playable(lon, lat)
+        poly = simplify_poly(contour, eps=(1.0 if is_waste else 0.3))
         if len(poly) < 4:
             poly = contour
         lod_low = simplify_poly(contour, eps=8.0)
@@ -916,7 +969,6 @@ def main():
         holes = []
         name = NAME_CN.get(pid.replace('_', ' '), pid.replace('_', ' '))
         nbrs = sorted(adj.get(idx, ()))
-        is_waste = not in_playable(lon, lat)
         wasteland_flags[idx] = is_waste
         pts = ','.join('{%d,%d}' % (int(round(a)), int(round(b))) for a, b in poly)
         rec = '{id=%d,name="%s",center={%d,%d},centerLon=%.4f,centerLat=%.4f,area=%d' % (
@@ -983,11 +1035,16 @@ def main():
         return (int(r * 255), int(g * 255), int(b * 255))
 
     # 调色板索引填充（一次完成，避免逐省全图扫描）
-    # 可玩区域外的省 = 沙漠色（底图自带沙漠,零运行时开销）
+    # 可玩区域外的省 = 沙漠色（底图自带沙漠,零运行时开销）；
+    # --no-desert 时**地图上不画沙漠**：废土省用无主米色（与 neutral 底图同色），
+    #   isWasteland 的游戏设定不受影响（点击限制/不显示名字等照旧，2026-09-15）
     palette = np.zeros((n_prov + 1, 3), dtype=np.uint8)
     palette[0] = SEA
     for i in range(1, n_prov + 1):
-        palette[i] = DESERT_RGB if wasteland_flags[i] else province_palette(i)
+        if wasteland_flags[i]:
+            palette[i] = UNOWNED_RGB if NO_DESERT else DESERT_RGB
+        else:
+            palette[i] = province_palette(i)
     color_arr = palette[ids]
     is_sea = ids == 0
     is_waste_px = np.zeros((n_prov + 1,), dtype=bool)
@@ -1001,9 +1058,11 @@ def main():
     kD[-1, :] = -1
     diffD = (ids != kD) & (ids >= 0) & (kD >= 0)
     border = diffR | diffD
-    # 沙漠省之间不画省界（连片荒野）
-    both_waste = is_waste_px[ids] & is_waste_px[kR]
-    border = border & ~both_waste
+    if not NO_DESERT:
+        # 沙漠省之间不画省界（连片荒野）；
+        # --no-desert 时跳过 → 全世界省界全画（"全世界都是区块"，2026-09-15）
+        both_waste = is_waste_px[ids] & is_waste_px[kR]
+        border = border & ~both_waste
     coast = (border & diffR & ((is_sea & (kR > 0)) | ((~is_sea) & (kR == 0)))) \
           | (border & diffD & ((is_sea & (kD > 0)) | ((~is_sea) & (kD == 0))))
     land_border = border & (~coast)
@@ -1021,7 +1080,10 @@ def main():
     px[0, 0] = SEA
     for i in range(1, 4096):
         if i <= n_prov:
-            px[i, 0] = DESERT_RGB if wasteland_flags[i] else province_palette(i)
+            if wasteland_flags[i]:
+                px[i, 0] = UNOWNED_RGB if NO_DESERT else DESERT_RGB
+            else:
+                px[i, 0] = province_palette(i)
         else:
             px[i, 0] = SEA
     out_lut = os.path.join(ASSET_DIR, 'province_lut.png')
@@ -1032,60 +1094,67 @@ def main():
     # 瓦片（1024px，海色补齐）
     # ------------------------------------------------------------------
     TILE = 1024
-    n = 0
-    for ty in range(0, BITMAP_H, TILE):
-        for tx in range(0, BITMAP_W, TILE):
-            box = (tx, ty, min(tx + TILE, BITMAP_W), min(ty + TILE, BITMAP_H))
-            tile = Image.fromarray(color_arr).crop(box)
-            if tile.size != (TILE, TILE):
-                full = Image.new('RGB', (TILE, TILE), SEA)
-                full.paste(tile, (0, 0))
-                tile = full
-            name = os.path.join(TILE_DIR, f'map_{tx // TILE}_{ty // TILE}.png')
-            tile.save(name, optimize=True)
-            n += 1
-    print(f'[EU4] 瓦片 {n} 张 → {TILE_DIR}')
+    if GEN_TILES:
+        os.makedirs(TILE_DIR, exist_ok=True)
+        n = 0
+        for ty in range(0, BITMAP_H, TILE):
+            for tx in range(0, BITMAP_W, TILE):
+                box = (tx, ty, min(tx + TILE, BITMAP_W), min(ty + TILE, BITMAP_H))
+                tile = Image.fromarray(color_arr).crop(box)
+                if tile.size != (TILE, TILE):
+                    full = Image.new('RGB', (TILE, TILE), SEA)
+                    full.paste(tile, (0, 0))
+                    tile = full
+                name = os.path.join(TILE_DIR, f'map_{tx // TILE}_{ty // TILE}.png')
+                tile.save(name, optimize=True)
+                n += 1
+        print(f'[{PACK_ID}] 瓦片 {n} 张 → {TILE_DIR}')
+    else:
+        print(f'[{PACK_ID}] 跳过瓦片（--no-tiles；整图就绪时用不到瓦片）')
 
     # ------------------------------------------------------------------
     # 地图包配置（scripts/data/mappacks/eu4.lua）
     # ------------------------------------------------------------------
+    crop_note = ('欧亚非裁剪（CROP_X0=%g）' % CROP_X0) if CROP_X0 > 0 else '全球 360°（不裁）'
     cfg = f'''-- ============================================================
--- 地图包：EU4 欧亚非（由 gen_eu4_map.py 生成，勿手改）
--- 数据源：data/eu4/eu4_provinces.svg（MapChart EU4，3360 省裁剪后 {len(provs)} 省）
--- 投影：等距圆柱 lon∈[-180,180] → x∈[0,1200] 裁剪后映射画布
+-- 地图包：{PACK_NAME}（由 gen_eu4_map.py --pack {PACK_ID} 生成，勿手改）
+-- 数据源：data/eu4/eu4_provinces.svg（MapChart EU4，3360 省，{crop_note}后 {len(provs)} 省）
+-- 投影：等距圆柱 lon∈[-180,180] → x∈[0,1200]{'，裁掉起点 %.0f' % CROP_X0 if CROP_X0 > 0 else '（全取）'}
 --       lat∈[78.54,-42.03] → y∈[0,480]（MapChart EU4 纬度标定）
+-- ⚠️ 生成命令：python3 gen_eu4_map.py --pack {PACK_ID} --crop {CROP_X0:g}{' --keep-oceania' if KEEP_OCEANIA else ''}{'' if GEN_TILES else ' --no-tiles'}{' --no-desert' if NO_DESERT else ''}
 -- ============================================================
 return {{
-  id = "eu4",
-  name = "EU4 欧亚非",
-  desc = "基于欧陆风云4省份划分的欧亚非地图（{len(provs)} 省，历史粒度适中）",
+  id = "{PACK_ID}",
+  name = "{PACK_NAME}",
+  desc = "{PACK_DESC}（{len(provs)} 省）",
   MAP_W = {int(BITMAP_W)},
   MAP_H = {int(BITMAP_H)},
   BITMAP_W = {int(BITMAP_W)},
   BITMAP_H = {int(BITMAP_H)},
   BITMAP_SCALE = 1.0,
-  BITMAP_PATH = "image/eu4/map_political.png",
-  PROVINCE_ID_PATH = "image/eu4/province_id.png",
-  PROVINCE_LUT_PATH = "image/eu4/province_lut.png",
-  TILE_PATH_PATTERN = "image/eu4/tiles/map_%d_%d.png",
+  BITMAP_PATH = "image/{PACK_ID}/map_political.png",
+  PROVINCE_ID_PATH = "image/{PACK_ID}/province_id.png",
+  PROVINCE_LUT_PATH = "image/{PACK_ID}/province_lut.png",
+  TILE_PATH_PATTERN = "image/{PACK_ID}/tiles/map_%d_%d.png",
   TILE_PX = 1024,
-  PROVINCE_FILES = {{ "data.mappacks.eu4.Provinces_%d" }},
+  PROVINCE_FILES = {{ "data.mappacks.{PACK_ID}.Provinces_%d" }},
   INITIAL_ZOOM = {900.0 / BITMAP_W:.3f},  -- 全图视角（按 900px 视口宽估）
   MIN_ZOOM = 0.05,
   MAX_ZOOM = {SCALE * 2},   -- 高清位图支撑的大倍率
   LUT_W = 4096,
   -- 投影：lon/lat → 逻辑像素（等距圆柱，纬度 78.54°N..-42.03°S 标定）
+  -- ⚠️ x 是**纯线性**（减常数 + 乘常数）：改 CROP_X0 只是整体平移，形状不变
   project = function(lon, lat)
-    local x = ((lon + 180.0) / 360.0 * 1200.0 - {CROP_X0}) * {SCALE}
+    local x = ((lon + 180.0) / 360.0 * 1200.0 - {CROP_X0:g}) * {SCALE}
     local y = ({LAT_NORTH} - lat) * {PX_PER_DEG_LAT} * {SCALE}
     return x, y
   end,
 }}
 '''
-    out_cfg = os.path.join(ROOT, 'scripts', 'data', 'mappacks', 'eu4.lua')
+    out_cfg = os.path.join(ROOT, 'scripts', 'data', 'mappacks', f'{PACK_ID}.lua')
     with open(out_cfg, 'w', encoding='utf-8') as fh:
         fh.write(cfg)
-    print(f'[EU4] 已写配置 {out_cfg}')
+    print(f'[{PACK_ID}] 已写配置 {out_cfg}')
 
     # 统计
     land_px = int(areas.sum())
@@ -1094,4 +1163,25 @@ return {{
 
 
 if __name__ == '__main__':
+    # ⚠️ 不带参数跑 = 生成 eu4（旧大陆），**行为和参数化之前完全一致**。
+    #    但注意：eu4.lua 事后被手工改过（显示名「旧大陆」、整图路径、MAX_ZOOM=4 等），
+    #    **重跑会把这些手改覆盖掉** —— 除非确实要重新生成旧大陆，否则别不带参数跑。
+    ap = argparse.ArgumentParser(description='EU4 省份 SVG → 地图包生成器')
+    ap.add_argument('--pack', default='eu4', help='包 id（= 输出目录名），默认 eu4')
+    ap.add_argument('--crop', type=float, default=495.0,
+                    help='裁剪起点（SVG x，0..1200）。495=欧亚非，0=全球，默认 495')
+    ap.add_argument('--keep-oceania', action='store_true',
+                    help='保留大洋洲（做全球图时必须加，否则澳大利亚/新西兰被剔掉）')
+    ap.add_argument('--name', default=None, help='显示名（写进生成的 .lua）')
+    ap.add_argument('--desc', default=None, help='描述（写进生成的 .lua）')
+    ap.add_argument('--no-tiles', action='store_true',
+                    help='不生成分块瓦片（整图就绪时用不到瓦片，只是回退路径）')
+    ap.add_argument('--no-desert', action='store_true',
+                    help='地图上不画沙漠：废土省用无主米色 + 省界全画'
+                         '（2026-09-15 新世界用；isWasteland 游戏设定不受影响）')
+    args = ap.parse_args()
+
+    configure(args.pack, args.crop, args.keep_oceania,
+              name=args.name, desc=args.desc, gen_tiles=not args.no_tiles,
+              no_desert=args.no_desert)
     main()

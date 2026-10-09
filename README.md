@@ -1,36 +1,52 @@
-# game-design-assets — 跨项目游戏传输中转库
+# game-design-assets
 
-> 用途:一个项目把游戏/资产上传到这里,另一个项目拉取并接管后续制作。
-> 仓库 = 唯一真相源;谁上传谁 push,谁接管谁 pull。
+> 游戏项目备份 / 交接仓库。
+> 当前内容：**《春秋霸业》**（`chunqiu-baye/`）
 
-## 上传规范(上传方遵守)
+---
 
-1. 在仓库里**新建一个以游戏名命名的文件夹**,游戏所有文件放里面(保持原目录结构)
-2. 游戏根目录必须附一份 `README.md`,写清:
-   - 游戏是什么(类型/题材/平台)
-   - 怎么运行/构建
-   - 目录结构说明
-   - 当前进度
-   - 需要接收方(接管方)做什么
-3. **不要上传**构建产物(如 dist/、.build/)和超过 100MB 的单文件
-4. commit message 用中文写清楚传了什么
-5. push 完成后,向用户输出【上传汇报】(模板见下)
+## 仓库内容
 
-## 【上传汇报】模板(push 后必填,用户会转交接管方)
+| 文件夹 | 说明 |
+|---|---|
+| `chunqiu-baye/` | 《春秋霸业》完整游戏项目（UrhoX Lua，历史大战略） |
 
-```
-【上传汇报】
-- 仓库与分支:
-- 游戏文件夹名:
-- 上传内容清单(顶层目录列表):
-- 游戏简介与运行方式:
-- 当前进度:
-- 需要接管方做什么:
-- 最新 commit hash:
+---
+
+## 怎么用
+
+### 接手开发
+
+```bash
+git clone https://github.com/wen130013/game-design-assets.git
+cd game-design-assets/chunqiu-baye
 ```
 
-## 接管方流程
+然后按顺序读：
 
+1. `README.md` — 游戏是什么、怎么跑
+2. `docs/交接-下一步与思路.md` — **重点**：已知问题清单、修复建议、下一步思路
+3. `CLAUDE.md` — 协作规范（改代码前先说明计划、小步验证等铁律）
+4. `TODO.md` — 待办事项
+5. `MAP_HANDOFF.md` — 地图方案交接
+
+### 更新上传
+
+```bash
+cd game-design-assets
+git pull
+# 把改动放进 chunqiu-baye/
+git add chunqiu-baye
+git commit -m "更新：说明改了什么"
+git push
 ```
-git pull → 读 <游戏文件夹>/README.md → 按其中"需要接管方做什么"开工
-```
+
+---
+
+## 注意
+
+- **不要上传** `dist/`、`.build/`、`work_tmp/`、`screenshots/`、`.cli/`、`logs/`、`saves/`
+  （`.gitignore` 已排除）
+- **单文件不得超过 100MB**（GitHub 硬限制）
+- `scripts/data/` 是游戏核心数据，**必须保留**（不要被 `.gitignore` 误伤）
+- 地图数据源自 MapChart 的 EU4 省份划分，**上架前需评估版权**

@@ -1,0 +1,107 @@
+# ============================================================
+# 构建产物 & 运行状态（可再生产，不进版本库）
+# ============================================================
+.build/
+dist/
+.cli/
+logs/
+*.log
+logs/.nfs*
+.sce/logs/
+.sce/build/build_steps/__pycache__/
+__pycache__/
+*.pyc
+
+# 运行时设置（引擎写的玩家数据：音乐开关/音量等，不是源码）
+settings.json
+
+# 临时 & 交换文件
+.tmp/
+*.crswap
+.DS_Store
+
+# OSS util
+.ossutil_checkpoint/
+ossutil_output/
+
+# 编辑器 / IDE / agent 配置
+.vscode/
+.cursor/
+.codex/
+.gemini/
+.claude/
+.emmylua/
+.installer/
+.maker/
+
+# Maker 引擎资产 & agent 文件（由 ai-dev-kit 提供，非用户源码）
+engine-docs/
+examples/
+lua-tools/
+schemas/
+skills/
+templates/
+tools/
+urhox-libs/
+AGENTS.md
+# ⚠️ CLAUDE.md **不忽略** —— 它是用户自己写的项目说明（含协作铁律），
+#    要纳入版本控制才能回滚。只有引擎自带的 AGENTS.md 需要忽略。
+
+# ============================================================
+# 大体积工作目录（2026-09-26 加，避免 git 仓库被撑爆）
+#   这些是"过程文件"，不是游戏运行需要的源码/资源。
+#   需要保留的成品请放进 assets/ 或 docs/。
+#
+#   ⚠️ gitignore 的行尾 # 注释不是注释，会被当成路径的一部分！
+#      注释只能单独占一行（下面每条都遵守）。
+# ============================================================
+
+# 1.9G 临时工作区（含各种 .bak 备份）
+work_tmp/
+
+# 171M 聊天上传的图片（原始文件，非游戏资源）
+_uploads/
+
+# 203M 调试截图（含验证用的临时图）
+screenshots/
+
+# 49M 参考素材（别人游戏的截图等）
+reference_assets/
+
+# 32M 中间数据（可再生产）
+data_work/
+
+# 16M 旧代码备份（历史包袱）
+backup/
+
+# 71M 地图原始数据（eu4/world 源数据，巨大且不需改）
+# ⚠️ 只匹配**根目录** data/。写成 `data/` 会连 scripts/data/（游戏核心数据：
+#    势力/地理/省份/地图包/科技）一起忽略，导致上传后游戏跑不起来。
+/data/
+
+# 90M 地理信息原始数据（Natural Earth 等）
+gis/
+
+# 43M 地形可视化实验脚本
+.ne_try/
+
+# 地图分析临时脚本
+analysis_tmp/
+
+# 调研资料（内含嵌套 git 仓库，不能直接纳入）
+.research/
+
+# agent skill 配置
+.agents/
+.opencode/
+.agent/
+
+# ⚠️ CLAUDE.md 是用户自己写的项目说明（不是引擎自带），**要纳入版本控制**
+#    所以这里不忽略它。引擎自带的 AGENTS.md 才忽略（见上面的引擎资产段）。
+
+# 本地存档（玩家数据，不该进版本库）
+saves/
+
+# 备份文件
+*.bak
+*.bak_*
