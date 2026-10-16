@@ -105,3 +105,12 @@ saves/
 # 备份文件
 *.bak
 *.bak_*
+
+# 交接时清理（2026-10-16）
+# mcp.json 含明文令牌，不应入库
+mcp.json
+# 人脸解析模型，与游戏运行无关（51MB）
+faceparser.onnx
+# 临时残留
+err.txt
+save_last.txt
